@@ -37,7 +37,7 @@ You'll paste these into the app the first time you connect a Telegram account. Y
 ## 3. Clone & install
 
 ```bash
-git clone https://github.com/Sam8r/TGWebDrive.git
+git clone https://github.com/dr-kto/TGWebDrive.git
 cd TGWebDrive
 npm install
 ```
@@ -248,4 +248,4 @@ Files themselves are in your Telegram account, so they're as safe as your Telegr
 
 ---
 
-Need help? Open an issue at <https://github.com/Sam8r/TGWebDrive/issues>.
+Need help? Open an issue at <https://github.com/dr-kto/TGWebDrive/issues>.

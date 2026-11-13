@@ -8,6 +8,35 @@ TGWebDrive — это веб-приложение для хранения и о�
 
 ---
 
+## Скриншоты
+
+### 🖥️ Интерфейс хранилища
+| Десктоп | Смартфон |
+|---|---|
+| ![Главная панель (Десктоп)](screenshots/dashboard-desktop.png) | ![Главная панель (Смартфон)](screenshots/dashboard-mobile.png) |
+
+### 🔐 Авторизация и подключение Telegram
+| Вход по QR-коду | Подключение по телефону | Авторизация в аккаунт |
+|---|---|---|
+| ![QR-код](screenshots/qr-login.png) | ![Телефон](screenshots/connect-phone.png) | ![Логин](screenshots/login.png) |
+
+### 🖼️ Предпросмотр файлов
+| Десктоп | Смартфон |
+|---|---|
+| ![Предпросмотр (Десктоп)](screenshots/preview-desktop.png) | ![Предпросмотр (Смартфон)](screenshots/preview-mobile.png) |
+
+### ⚙️ Настройки и кастомизация (White-label)
+| Десктоп | Смартфон |
+|---|---|
+| ![Настройки (Десктоп)](screenshots/settings-desktop.png) | ![Настройки (Смартфон)](screenshots/settings-mobile.png) |
+
+### 🔗 Публичные ссылки и API
+| Менеджер ссылок | Управление API-ключами |
+|---|---|
+| ![Ссылки](screenshots/shares.png) | ![API ключи](screenshots/api-keys.png) |
+
+---
+
 ## Возможности
 
 ### Работа с файлами
@@ -55,7 +84,7 @@ TGWebDrive — это веб-приложение для хранения и о�
 
 1. Клонируйте репозиторий:
    ```bash
-   git clone https://github.com/Sam8r/TGWebDrive.git
+   git clone https://github.com/dr-kto/TGWebDrive.git
    cd TGWebDrive
    ```
 

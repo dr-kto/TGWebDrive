@@ -1,5 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { createHash } from "node:crypto";
 import { stmt } from "../db.js";
 import { requireAppAuth, requireAdmin } from "../middleware.js";
@@ -72,8 +74,8 @@ api.post("/v1/files", requireApiKey, async (req, res, next) => {
     const size = Number(req.headers["x-filesize"] || 0);
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
-    upDir = fs.mkdtempSync("/tmp/tgd-api-");
-    tmp = `${upDir}/${fileName}`;
+    upDir = fs.mkdtempSync(path.join(os.tmpdir(), "tgd-api-"));
+    tmp = path.join(upDir, fileName);
     await new Promise((resolve, reject) => {
       const out = fs.createWriteStream(tmp);
       req.pipe(out);

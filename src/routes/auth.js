@@ -11,7 +11,7 @@ import {
   destroyUserSessions,
 } from "../middleware.js";
 import { hashPassword, verifyPassword, uid } from "../util.js";
-import { beginLogin, resendCode, finishLogin, cancelLogin, dropClient } from "../tg/manager.js";
+import { beginLogin, resendCode, finishLogin, cancelLogin, dropClient, beginQrLogin, checkQrLogin, submitQr2FA, cancelQrLogin } from "../tg/manager.js";
 
 export const auth = Router();
 
@@ -178,6 +178,51 @@ auth.post("/auth/tg/password", requireAppAuth, requireAdmin, async (req, res, ne
 
 auth.post("/auth/tg/cancel", requireAppAuth, requireAdmin, (req, res) => {
   cancelLogin(req.body?.tempToken);
+  res.json({ ok: true });
+});
+
+/* -------- QR Login (admin only) -------- */
+
+auth.post("/auth/tg/qr/start", requireAppAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const { apiId, apiHash } = req.body || {};
+    if (!apiId || !apiHash) return res.status(400).json({ error: "apiId and apiHash are required" });
+    const r = await beginQrLogin(Number(apiId), String(apiHash));
+    if (r.done && r.accountId) {
+      updateSession(req, { currentAccountId: r.accountId });
+    }
+    res.json(r);
+  } catch (e) {
+    next(e);
+  }
+});
+
+auth.post("/auth/tg/qr/check", requireAppAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const r = checkQrLogin(req.body?.tempToken);
+    if (r.done && r.accountId) {
+      updateSession(req, { currentAccountId: r.accountId });
+    }
+    res.json(r);
+  } catch (e) {
+    next(e);
+  }
+});
+
+auth.post("/auth/tg/qr/password", requireAppAuth, requireAdmin, async (req, res, next) => {
+  try {
+    const r = await submitQr2FA(req.body?.tempToken, req.body?.password);
+    if (r.done && r.accountId) {
+      updateSession(req, { currentAccountId: r.accountId });
+    }
+    res.json(r);
+  } catch (e) {
+    next(e);
+  }
+});
+
+auth.post("/auth/tg/qr/cancel", requireAppAuth, requireAdmin, (req, res) => {
+  cancelQrLogin(req.body?.tempToken);
   res.json({ ok: true });
 });
 

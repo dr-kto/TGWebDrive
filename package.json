@@ -24,15 +24,6 @@
     "brandable"
   ],
   "license": "MIT",
-  "author": "Samer Ahmed",
-  "homepage": "https://github.com/Sam8r/TGWebDrive",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Sam8r/TGWebDrive.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Sam8r/TGWebDrive/issues"
-  },
   "dependencies": {
     "archiver": "^7.0.1",
     "better-sqlite3": "^11.9.1",
@@ -41,6 +32,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "mime-types": "^2.1.35",
+    "qrcode": "^1.5.4",
     "sharp": "^0.35.3",
     "telegram": "^2.26.0"
   }

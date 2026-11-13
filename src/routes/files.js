@@ -1,5 +1,7 @@
 import { Router } from "express";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import mime from "mime-types";
 import { stmt } from "../db.js";
 import { config } from "../config.js";
@@ -131,8 +133,8 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     const caption = req.headers["x-caption"] ? decodeURIComponent(req.headers["x-caption"]) : "";
     const forceDocument = req.headers["x-force-document"] !== "0";
 
-    upDir = fs.mkdtempSync("/tmp/tgd-up-");
-    tmp = `${upDir}/${fileName}`;
+    upDir = fs.mkdtempSync(path.join(os.tmpdir(), "tgd-up-"));
+    tmp = path.join(upDir, fileName);
     const out = fs.createWriteStream(tmp);
     let received = 0;
     await new Promise((resolve, reject) => {
@@ -152,7 +154,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
     let thumbPath;
     if (IMAGE_RE.test(fileName)) {
       try {
-        thumbPath = `${upDir}/_thumb.jpg`;
+        thumbPath = path.join(upDir, "_thumb.jpg");
         await generateThumb(tmp, thumbPath);
       } catch {
         thumbPath = undefined;
@@ -187,7 +189,7 @@ files.post("/files/upload", requireAppAuth, requireAccount, async (req, res, nex
           // Name the temp part after the real file so Telegram stores it under a
           // recognisable name (not the temp basename "_part0").
           const partName = `${fileName}.part${partIndex}`.replace(/[\\/]/g, "_");
-          const partPath = `${upDir}/${partName}`;
+          const partPath = path.join(upDir, partName);
           await sliceToFile(tmp, offset, thisSize, partPath);
           const sent = await uploadFile(client, peer, {
             filePath: partPath,

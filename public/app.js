@@ -12,8 +12,6 @@ const apiPresets = window.__PRESETS__ || [];
 
 /* ----- branding (instance-level, admin-configurable) ----- */
 let brand = { name: "Telegram Drive", accent: "#4f8cff", logo: "", tagline: "Secure file sharing", copyright: "" };
-const CREDIT_HREF = "https://linktr.ee/thesamgfx";
-const CREDIT_HTML = `Telegram Web Drive Made with <span class="heart">&hearts;</span> by <a class="credit-name" href="${CREDIT_HREF}" target="_blank" rel="noopener">Samer Ahmed</a>`;
 function hexShade(hex, amt) {
   const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || "#4f8cff"));
   if (!m) return hex;
@@ -360,40 +358,89 @@ function renderConnect() {
       (a) => `<div class="account-pill">${a.premium ? icon("zap", { size: 14, cls: "gold" }) : ""}<b>${esc(a.label)}</b> <span class="muted">${esc(a.phone || a.username || "")}</span></div>`
     )
     .join("");
+  const presetSel = (id) => apiPresets.length ? `<select id="${id}" class="mb"><option value="">Enter my own…</option>${apiPresets.map((p, i) => `<option value="${i}">Preset ${i + 1}</option>`).join("")}</select>` : "";
+  const apiRow = (idF, hashF) => `<div class="row">
+    <div class="input-wrap">${icon("keyRound", { size: 16, cls: "lead" })}<input id="${idF}" placeholder="api_id" inputmode="numeric" required /></div>
+    <div class="input-wrap">${icon("keyRound", { size: 16, cls: "lead" })}<input id="${hashF}" placeholder="api_hash" required /></div></div>`;
   $("#app").innerHTML = authShell("Connect Telegram", "Your Telegram account becomes the storage backend.", `
   ${accs ? `<div class="acc-list">${accs}</div>` : ""}
-  <form id="connForm">
-    <div class="field">
-      <label>API credentials ${apiPresets.length ? "(or pick a preset)" : ""}</label>
-      ${apiPresets.length ? `<select id="preset" class="mb"><option value="">Enter my own…</option>${apiPresets.map((p, i) => `<option value="${i}">Preset ${i + 1}</option>`).join("")}</select>` : ""}
-      <div class="row">
-        <div class="input-wrap">${icon("keyRound", { size: 16, cls: "lead" })}<input id="apiId" placeholder="api_id" inputmode="numeric" required /></div>
-        <div class="input-wrap">${icon("keyRound", { size: 16, cls: "lead" })}<input id="apiHash" placeholder="api_hash" required /></div>
-      </div>
-    </div>
+  <div class="tg-tabs">
+    <button class="tg-tab active" data-tab="qr">${icon("qrCode", { size: 15 })} QR Code</button>
+    <button class="tg-tab" data-tab="sms">${icon("phone", { size: 15 })} Phone</button>
+  </div>
+  <div id="tabQr" class="tg-tab-panel"><form id="qrCredsForm">
+    <div class="field"><label>API credentials</label>${presetSel("presetQr")}${apiRow("apiIdQr","apiHashQr")}</div>
+    <div class="err" id="errQr"></div>
+    <button class="primary block" type="submit">${icon("qrCode", { size: 16 })} Show QR code</button>
+  </form></div>
+  <div id="tabSms" class="tg-tab-panel" style="display:none"><form id="connForm">
+    <div class="field"><label>API credentials</label>${presetSel("preset")}${apiRow("apiId","apiHash")}</div>
     <div class="field"><label>Phone number</label>
       <div class="input-wrap">${icon("phone", { size: 16, cls: "lead" })}<input id="phone" placeholder="+1 555 000 0000" required /></div></div>
     <div class="err" id="err"></div>
     <button class="primary block" type="submit">${icon("send", { size: 16 })} Send login code</button>
-    <p class="hint">Get your <b>api_id</b> and <b>api_hash</b> from <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org/apps</a>. Stored only on this server.</p>
-  </form>`);
-  if (apiPresets.length)
-    $("#preset").onchange = (e) => {
-      const p = apiPresets[e.target.value];
-      $("#apiId").value = p ? p.id : "";
-      $("#apiHash").value = p ? p.hash : "";
-    };
-  $("#connForm").onsubmit = async (e) => {
-    e.preventDefault();
-    $("#err").textContent = "";
+  </form></div>
+  <p class="hint center">Get <b>api_id</b> / <b>api_hash</b> at <a href="https://my.telegram.org/apps" target="_blank" rel="noopener">my.telegram.org</a></p>`);
+  // tabs
+  $$(".tg-tab").forEach(btn => { btn.onclick = () => {
+    $$(".tg-tab").forEach(b => b.classList.remove("active")); btn.classList.add("active");
+    $("#tabQr").style.display = btn.dataset.tab === "qr" ? "" : "none";
+    $("#tabSms").style.display = btn.dataset.tab === "sms" ? "" : "none";
+  };});
+  // presets
+  const bp = (s, i, h) => { const el = $(s); if (el) el.onchange = e => { const p = apiPresets[e.target.value]; $(i).value = p?p.id:""; $(h).value = p?p.hash:""; };};
+  if (apiPresets.length) { bp("#preset","#apiId","#apiHash"); bp("#presetQr","#apiIdQr","#apiHashQr"); }
+  // phone form
+  $("#connForm").onsubmit = async (e) => { e.preventDefault(); $("#err").textContent = "";
     const body = { apiId: $("#apiId").value.trim(), apiHash: $("#apiHash").value.trim(), phone: $("#phone").value.trim() };
-    try {
-      const r = await api("/api/auth/tg/request", { method: "POST", body: JSON.stringify(body) });
-      renderCodeStep(body, r.tempToken, r.isCodeViaApp);
-    } catch (err) {
-      $("#err").textContent = err.message;
-    }
+    try { const r = await api("/api/auth/tg/request", { method: "POST", body: JSON.stringify(body) }); renderCodeStep(body, r.tempToken, r.isCodeViaApp); }
+    catch (err) { $("#err").textContent = err.message; } };
+  // QR form
+  $("#qrCredsForm").onsubmit = async (e) => { e.preventDefault(); $("#errQr").textContent = "";
+    const body = { apiId: $("#apiIdQr").value.trim(), apiHash: $("#apiHashQr").value.trim() };
+    try { const r = await api("/api/auth/tg/qr/start", { method: "POST", body: JSON.stringify(body) });
+      if (r.done) return finishConnect(); renderQrStep(body, r.tempToken, r.qrDataUrl); }
+    catch (err) { $("#errQr").textContent = err.message; } };
+}
+
+function renderQrStep(creds, tempToken, qrDataUrl) {
+  $("#app").innerHTML = authShell("Scan QR Code", "Open Telegram → Settings → Devices → Link Desktop Device", `
+  <div class="qr-container">
+    <div class="qr-frame"><img id="qrImg" src="${qrDataUrl}" alt="QR" width="280" height="280" />
+      <div class="qr-overlay" id="qrOverlay" style="display:none"><div class="qr-spinner"></div><span>Confirming…</span></div></div>
+    <div class="qr-steps">
+      <div class="qr-step"><span class="qr-num">1</span> Open <b>Telegram</b> on your phone</div>
+      <div class="qr-step"><span class="qr-num">2</span> Go to <b>Settings → Devices</b></div>
+      <div class="qr-step"><span class="qr-num">3</span> Tap <b>Link Desktop Device</b></div>
+      <div class="qr-step"><span class="qr-num">4</span> Point camera at this QR code</div>
+    </div>
+  </div>
+  <div class="err" id="errQr"></div>
+  <button type="button" class="link-btn" id="qrCancelBtn">${icon("chevronLeft", { size: 14 })} Back</button>`);
+  $("#qrCancelBtn").onclick = async () => {
+    clearInterval(window.__qrPoll);
+    try { await api("/api/auth/tg/qr/cancel", { method: "POST", body: JSON.stringify({ tempToken }) }); } catch {}
+    renderConnect();
   };
+  window.__qrPoll = setInterval(async () => {
+    try {
+      const r = await api("/api/auth/tg/qr/check", { method: "POST", body: JSON.stringify({ tempToken }) });
+      if (r.qrDataUrl) { const img = $("#qrImg"); if (img && img.src !== r.qrDataUrl) img.src = r.qrDataUrl; }
+      if (r.needs2FA) { clearInterval(window.__qrPoll); renderQr2FAStep(tempToken); return; }
+      if (r.done) { clearInterval(window.__qrPoll); const ov = $("#qrOverlay"); if (ov) ov.style.display = "flex"; setTimeout(() => finishConnect(), 500); }
+    } catch (err) { clearInterval(window.__qrPoll); $("#errQr").textContent = err.message; }
+  }, 1500);
+}
+
+function renderQr2FAStep(tempToken) {
+  $("#app").innerHTML = authShell("Two-factor password", "Your Telegram account has cloud 2FA enabled.", `
+  <form id="qrPwForm"><div class="field"><label>Cloud password</label>
+    <div class="input-wrap">${icon("lock", { size: 16, cls: "lead" })}<input type="password" id="qr2faPw" required autofocus placeholder="2FA password" /></div></div>
+    <div class="err" id="errQr"></div>
+    <button class="primary block" type="submit">${icon("check", { size: 16 })} Unlock</button></form>`);
+  $("#qrPwForm").onsubmit = async (e) => { e.preventDefault();
+    try { await api("/api/auth/tg/qr/password", { method: "POST", body: JSON.stringify({ tempToken, password: $("#qr2faPw").value }) }); finishConnect(); }
+    catch (err) { $("#errQr").textContent = err.message; } };
 }
 
 function renderCodeStep(creds, tempToken, isCodeViaApp) {
@@ -468,7 +515,6 @@ function renderApp() {
       <div class="brand" id="topBrand"></div>
       <button class="gd-new" id="newBtn">${icon("plus", { size: 20 })}<span>New</span></button>
       <div class="nav" id="nav"></div>
-      <div class="side-foot">${CREDIT_HTML}</div>
     </aside>
     <main class="main">
       <div class="topbar">
@@ -1780,7 +1826,6 @@ function viewSettings() {
           <div class="field"><label>Share tagline</label><input id="brTagline" value="${esc(brand.tagline)}" maxlength="80" placeholder="Secure file sharing" /></div>
           <div class="field"><label>Copyright line <span class="hint">(leave blank to auto-use “© year · name”)</span></label><input id="brCopy" value="${esc(brand.copyright)}" maxlength="80" placeholder="© ${new Date().getFullYear()} My Drive" /></div>
           <div class="brand-actions"><button class="primary" id="brSave">${icon("check", { size: 15 })} Save branding</button><div class="err" id="brErr"></div></div>
-          <p class="hint brand-credit-note">The credit “Telegram Web Drive Made with ♥ by Samer Ahmed” is always shown on public pages and cannot be removed.</p>
         </div>
       </div>` : "";
   content().innerHTML = `
@@ -2013,7 +2058,7 @@ async function renderPublicShare(id) {
     `<div class="pub-wrap">
       <header class="pub-head"><div class="pub-brand">${brandMark(22)}<span>${brandName()}</span></div></header>
       <main class="pub-main">${inner}</main>
-      <footer class="pub-foot"><span class="pub-tagline">${esc(brand.tagline || "")}</span><span class="pub-copy">${esc(brandFootCopyright())}</span><span class="pub-credit">${CREDIT_HTML}</span></footer>
+      <footer class="pub-foot"><span class="pub-tagline">${esc(brand.tagline || "")}</span><span class="pub-copy">${esc(brandFootCopyright())}</span></footer>
     </div>`;
 
   function showGate() {

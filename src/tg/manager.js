@@ -2,6 +2,7 @@ import { TelegramClient, Api } from "telegram";
 import { StringSession } from "telegram/sessions/index.js";
 import { stmt } from "../db.js";
 import { uid } from "../util.js";
+import QRCode from "qrcode";
 
 const OPTS = { connectionRetries: 5, useWSS: true, retryDelay: 1000, autoReconnect: true };
 
@@ -90,6 +91,142 @@ export async function beginLogin(apiId, apiHash, phone) {
     createdAt: Date.now(),
   });
   return { tempToken, isCodeViaApp: !!sent.isCodeViaApp };
+}
+
+/* ---------------- QR Login flow ---------------- */
+
+const qrLogins = new Map();
+
+export async function beginQrLogin(apiId, apiHash) {
+  apiId = Number(apiId);
+  const client = buildSession("", apiId, apiHash);
+  await connect(client);
+  const tempToken = uid() + uid();
+
+  let tokenData;
+  try {
+    tokenData = await client.invoke(
+      new Api.auth.ExportLoginToken({ apiId, apiHash, exceptIds: [] })
+    );
+  } catch (e) {
+    await safeDisconnect(client);
+    throw mapTgError(e);
+  }
+
+  if (tokenData.className === "auth.LoginTokenSuccess") {
+    const acct = await _finalizeQr(client, apiId, apiHash);
+    return { tempToken, done: true, accountId: acct.id };
+  }
+
+  const qrDataUrl = await _tokenToQr(tokenData.token);
+  const entry = {
+    client, apiId, apiHash,
+    createdAt: Date.now(), done: false, accountId: null,
+    error: null, needs2FA: false, qrDataUrl, me: null,
+    expiresAt: tokenData.expires * 1000,
+  };
+  qrLogins.set(tempToken, entry);
+  _pollQr(tempToken, entry);
+  return { tempToken, qrDataUrl, expiresIn: tokenData.expires - Math.floor(Date.now() / 1000) };
+}
+
+async function _tokenToQr(token) {
+  const b64 = Buffer.from(token).toString("base64url");
+  return QRCode.toDataURL(`tg://login?token=${b64}`, {
+    width: 280, margin: 2,
+    color: { dark: "#000000", light: "#ffffff" },
+    errorCorrectionLevel: "M",
+  });
+}
+
+async function _finalizeQr(client, apiId, apiHash) {
+  const me = await client.getMe();
+  const sessionStr = client.session.save();
+  const id = uid();
+  const now = Date.now();
+  stmt.addAccount.run({
+    id,
+    label: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || me.phone || "Account",
+    phone: me.phone || "",
+    user_id: String(me.id),
+    username: me.username || null,
+    api_id: apiId, api_hash: apiHash,
+    session: sessionStr,
+    is_premium: me.premium ? 1 : 0,
+    created_at: now, last_used_at: now,
+  });
+  clients.set(id, { client, lastUsed: now });
+  return {
+    id,
+    me: {
+      name: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || me.phone || "Account",
+      username: me.username || null, phone: me.phone || "", premium: !!me.premium,
+    },
+  };
+}
+
+async function _pollQr(tempToken, entry) {
+  const { client, apiId, apiHash } = entry;
+  for (let i = 0; i < 90; i++) {
+    if (!qrLogins.has(tempToken)) return;
+    await new Promise((r) => setTimeout(r, 1500));
+    if (!qrLogins.has(tempToken)) return;
+    try {
+      const r = await client.invoke(
+        new Api.auth.ExportLoginToken({ apiId, apiHash, exceptIds: [] })
+      );
+      if (r.className === "auth.LoginTokenSuccess") {
+        const acct = await _finalizeQr(client, apiId, apiHash);
+        entry.accountId = acct.id; entry.me = acct.me; entry.done = true;
+        return;
+      }
+      if (r.className === "auth.LoginTokenMigrateTo") {
+        await client._switchDC(r.dcId);
+        try { await client.invoke(new Api.auth.ImportLoginToken({ token: r.token })); }
+        catch (e2) {
+          if (e2.errorMessage === "SESSION_PASSWORD_NEEDED") { entry.needs2FA = true; return; }
+          throw e2;
+        }
+        const acct = await _finalizeQr(client, apiId, apiHash);
+        entry.accountId = acct.id; entry.me = acct.me; entry.done = true;
+        return;
+      }
+      if (r.token) { entry.qrDataUrl = await _tokenToQr(r.token); entry.expiresAt = r.expires * 1000; }
+    } catch (e) {
+      if (e.errorMessage === "SESSION_PASSWORD_NEEDED") { entry.needs2FA = true; return; }
+    }
+  }
+  if (qrLogins.has(tempToken) && !entry.done) { entry.error = "QR login timed out"; entry.done = true; }
+}
+
+export function checkQrLogin(tempToken) {
+  const e = qrLogins.get(tempToken);
+  if (!e) throw new HttpError(400, "QR session expired");
+  if (e.error) { qrLogins.delete(tempToken); throw new HttpError(400, e.error); }
+  if (e.needs2FA) return { done: false, needs2FA: true };
+  if (e.done && e.accountId) { const r = { done: true, accountId: e.accountId, me: e.me }; qrLogins.delete(tempToken); return r; }
+  return { done: false, qrDataUrl: e.qrDataUrl };
+}
+
+export async function submitQr2FA(tempToken, password) {
+  const e = qrLogins.get(tempToken);
+  if (!e) throw new HttpError(400, "QR session expired");
+  if (!e.needs2FA) throw new HttpError(400, "2FA not required");
+  try {
+    await do2FA(e.client, password);
+    const acct = await _finalizeQr(e.client, e.apiId, e.apiHash);
+    const r = { done: true, accountId: acct.id, me: acct.me };
+    qrLogins.delete(tempToken);
+    return r;
+  } catch (err) {
+    if (err instanceof HttpError) throw err;
+    throw mapTgError(err);
+  }
+}
+
+export function cancelQrLogin(tempToken) {
+  const e = qrLogins.get(tempToken);
+  if (e) { safeDisconnect(e.client); qrLogins.delete(tempToken); }
 }
 
 export async function resendCode(tempToken) {
@@ -201,6 +338,12 @@ setInterval(() => {
     if (L.createdAt < cutoff) {
       safeDisconnect(L.client);
       logins.delete(k);
+    }
+  }
+  for (const [k, L] of qrLogins) {
+    if (L.createdAt < cutoff) {
+      safeDisconnect(L.client);
+      qrLogins.delete(k);
     }
   }
 }, 10 * 60 * 1000).unref();

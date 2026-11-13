@@ -1,6 +1,8 @@
 import { Api, utils } from "telegram";
 import bigInt from "big-integer";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import mime from "mime-types";
 import { fmtBytes, classify, extOf } from "../util.js";
 import { HttpError } from "./manager.js";
@@ -371,7 +373,7 @@ export async function streamMultipart(client, peer, parts, total, req, res, { at
 
 export async function streamThumb(client, msg, res, cacheKey) {
   // 1. native Telegram thumbnail
-  const tmp = `/tmp/tgd-thumb-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`;
+  const tmp = path.join(os.tmpdir(), `tgd-thumb-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
   try {
     await client.downloadMedia(msg, { outputFile: tmp, thumb: 0 });
     if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {

@@ -1,203 +1,136 @@
-# TGWebDrive
+﻿# TGWebDrive
 
-**Self-hosted cloud drive that turns Telegram into unlimited free storage.**
+**Персональное облачное хранилище, использующее Telegram как бесплатный неограниченный диск.**
 
-TGWebDrive is a personal (or team) file drive that stores everything inside Telegram chats/channels via the Telegram API — giving you effectively unlimited, free cloud storage with a polished Google Drive-style web UI, background uploads, public share links, multi-user access, full white-label branding, and a REST API.
+TGWebDrive — это веб-приложение для хранения и обмена файлами, использующее Telegram API. Все файлы хранятся в «Избранном» (Saved Messages) или приватных каналах вашего Telegram-аккаунта, предоставляя неограниченное дисковое пространство с удобным веб-интерфейсом в стиле Google Drive.
 
-No AWS bill. No storage limits. No vendor lock-in. Just Telegram.
-
----
-
-![Node](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Storage](https://img.shields.io/badge/storage-Telegram-26A5E4?logo=telegram&logoColor=white)
-![Self Hosted](https://img.shields.io/badge/self--hosted-ready-success)
-![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen)
-
-![Dashboard](screenshots/dashboard-current.png)
+Никаких платных подписок на облако. Никаких ограничений хранилища. Только ваш Telegram.
 
 ---
 
-## Why TGWebDrive?
+## Возможности
 
-| | |
-|---|---|
-| **Infinite free storage** | Files live in your own Telegram Saved Messages or a private channel. Telegram gives every account ~unlimited cloud storage. |
-| **Real streaming** | Videos and audio play inline with seeking (HTTP range support) — no full download before playback. |
-| **Public sharing** | Beautiful share pages for files & folders, with optional passwords, expiry, and **"Download all" as ZIP**. |
-| **White-label branding** | Rename the app, set your accent color, upload your logo, and customize the footer — fully yours. |
-| **Multi-user** | Admins manage users (admin / user roles). Each session is isolated. |
-| **REST API** | Ship API keys and automate uploads/downloads from scripts or other apps. |
-| **Background transfers** | Uploads continue while you navigate the app, with progress, cancellation, retry, and service-worker recovery. |
-| **No build step** | Vanilla JS frontend. Clone, `npm install`, run. |
+### Работа с файлами
+- **Загрузка**: перетаскивание (Drag-and-Drop), множественный выбор или загрузка целых папок с сохранением структуры.
+- **Фоновые загрузки**: загрузки продолжаются в фоне даже при переходах по страницам (благодаря Service Worker), с отображением прогресса, возможностью отмены и повтора.
+- **Большие файлы**: автоматическое разделение файлов больше 1.9 ГБ на части и бесшовная склейка в единый файл при скачивании.
+- **Ограничения по размеру**: до 2 ГБ на файл для обычных аккаунтов и до 4 ГБ с подпиской Telegram Premium.
+- **Организация**: папки, вложенные подпапки, хлебные крошки, переименование, удаление и поиск.
+- **Предпросмотр**: встроенный плеер для видео (с поддержкой перемотки и потокового воспроизведения), аудио, картинок и PDF.
+- **Миниатюры**: автоматическая генерация превью для изображений и видео.
 
----
+### Вход и авторизация
+- **Вход по QR-коду**: быстрое подключение через камеру смартфона (*Telegram → Настройки → Устройства → Подключить устройство*).
+- **Вход по номеру телефона**: отправка кода в приложение Telegram или по SMS.
+- **Поддержка 2FA**: полная поддержка двухфакторной аутентификации (облачного пароля).
+- **Подключение нескольких аккаунтов**: переключение между аккаунтами Telegram прямо в интерфейсе.
 
-## Screenshots
+### Публичный доступ (Sharing)
+- Публичные ссылки на отдельные файлы и папки.
+- Защита ссылок паролем и установка срока действия (таймер автоудаления).
+- **Скачивание папки в один клик**: архивация содержимого папки в ZIP «на лету» в процессе отдачи.
+- Статистика скачиваний.
 
-### Login
-![Login](screenshots/login-current.png)
+### Кастомизация и брендинг
+- Собственное имя сервиса, логотип и акцентный цвет интерфейса.
+- Настройка футера, копирайта и подписи для страниц общего доступа.
+- Тёмная и светлая темы оформления.
+- Адаптивный мобильный интерфейс для смартфонов и планшетов.
 
-### Dashboard — grid view with thumbnails
-![Dashboard](screenshots/dashboard-current.png)
-
-### Share links manager
-![Shares](screenshots/shares-current.png)
-
-### Settings & branding
-![Settings](screenshots/settings-current.png)
-
-### Public share page (file)
-![Share file](screenshots/share-file-current.png)
-
-### Public share page (mobile)
-![Share mobile](screenshots/share-mobile-current.png)
-
----
-
-## Features
-
-**Files**
-- Upload files with drag-and-drop, multi-select, or a folder picker
-- Background uploads with a persistent progress dock, concurrent transfers, cancel, retry, and live progress
-- Upload whole directory trees while preserving nested folder structure
-- Upload (streamed, chunked) — up to 2 GB per file, ~4 GB with Telegram Premium
-- **Large files auto-split**: anything bigger than ~1.9 GB is transparently split into ≤2 GB Telegram parts that reassemble into a single file on download (no extra steps)
-- Download, rename, delete, search
-- Auto-generated thumbnails for images (via `sharp`); native Telegram thumbnails for videos/docs
-- Grid and list views with bulk selection and actions
-- Folder cards, nested subfolders, breadcrumbs, and folder deletion
-
-**Previews**
-- Images, **video with seekable streaming**, audio, PDF — all inline
-- Graceful fallback for unsupported types
-
-**Sharing**
-- Per-file and per-folder public links
-- Password protection & expiry timers
-- Folder **"Download all"** streamed as a ZIP
-- Custom-branded public pages (your name, colors, logo, tagline, copyright)
-- Share metadata including download counts and expiration status
-
-**Branding (admin)**
-- Custom app name (shown in dashboard, login, share pages, browser tab, favicon)
-- Accent color picker — re-themes the entire UI, including the favicon background
-- Custom logo upload (PNG / SVG / WebP / etc.)
-- Custom share tagline & copyright line
-
-**Multi-user & accounts**
-- Admin/user roles with a managed user table
-- Connect multiple Telegram accounts and switch between them
-- Saved Messages and channel-backed folders
-- Per-session account selection and protected admin settings
-
-**API**
-- Token-based REST API (`/api/v1/...`) for programmatic upload/download/listing
-
-**UX**
-- Dark & light themes
-- Fully mobile-responsive
-- Google Drive-inspired sidebar, search, toolbar, menus, dialogs, and responsive upload dock
-- Persistent service-worker upload handling across page navigation
-- Self-hosted Lucide icons — zero external requests
+### Безопасность и многопользовательский режим
+- Роли: Администраторы и Пользователи.
+- Изолированные пользовательские сессии.
+- Файлы передаются напрямую в Telegram через потоки (Stream) и не сохраняются на диске сервера.
+- REST API с авторизацией по токенам (`/api/v1/...`).
 
 ---
 
-## Quick start
+## Быстрый старт
 
-```bash
-git clone https://github.com/Sam8r/TGWebDrive.git
-cd TGWebDrive
-npm install
-cp .env.example .env      # then edit SECRET and PUBLIC_URL
-npm start
-```
+### Требования
+- **Node.js** версии 20, 22 LTS или новее
+- **npm** версии 9+
 
-Then open `http://localhost:3001`, create your admin account, and connect a Telegram account using an `api_id` + `api_hash` from <https://my.telegram.org>.
+### Установка
 
-> Full deployment guide (PM2, Apache/Nginx reverse proxy, HTTPS) lives in **[INSTALL.md](INSTALL.md)**.
+1. Клонируйте репозиторий:
+   ```bash
+   git clone https://github.com/Sam8r/TGWebDrive.git
+   cd TGWebDrive
+   ```
+
+2. Установите зависимости:
+   ```bash
+   npm install
+   ```
+
+3. Создайте файл конфигурации `.env`:
+   ```bash
+   cp .env.example .env
+   ```
+
+4. Запустите приложение:
+   ```bash
+   npm start
+   ```
+
+5. Откройте в браузере `http://localhost:3001`:
+   - При первом запуске создайте учётную запись администратора.
+   - Подключите аккаунт Telegram, введя ваши `api_id` и `api_hash` (или выбрав готовый пресет).
+   - Выберите удобный способ входа: сканирование **QR-кода** или код по **номеру телефона**.
 
 ---
 
-## Configuration
+## Настройка (.env)
 
-All settings are optional except `SECRET`. Copy `.env.example` to `.env` and edit:
-
-| Variable | Default | Description |
+| Переменная | По умолчанию | Описание |
 |---|---|---|
-| `PORT` | `3001` | HTTP port the app listens on |
-| `HOST` | `127.0.0.1` | Bind address (keep `127.0.0.1` behind a reverse proxy) |
-| `SECRET` | *(auto-generated)* | 64+ hex chars used to sign session cookies & share tokens. **Set your own** with `openssl rand -hex 32`. |
-| `PUBLIC_URL` | — | Public base URL (no trailing slash), e.g. `https://drive.example.com`. Used to build share links. |
-| `MAX_UPLOAD_BYTES` | `2147483648` | Max upload size (2 GB; Telegram's per-file cap) |
-| `SPLIT_PART_BYTES` | `~2040109465` | Files larger than this are auto-split into multipart entries that reassemble on download. Defaults to ~1.9 GiB for a safe margin under Telegram's 2 GiB cap. |
-| `API_PRESETS` | — | Optional `api_id:api_hash,api_id:api_hash` presets shown on the login screen |
+| `PORT` | `3001` | Порт HTTP-сервера |
+| `HOST` | `127.0.0.1` | Адрес прослушивания (рекомендуется `127.0.0.1` за реверс-прокси) |
+| `SECRET` | *(генерируется)* | Секретный ключ для подписи сессионных cookie и токенов (64+ hex-символа) |
+| `PUBLIC_URL` | `http://localhost:3001` | Внешний URL (без слэша на конце), используемый для создания публичных ссылок |
+| `MAX_UPLOAD_BYTES` | `2147483648` | Максимальный размер загружаемого файла (2 ГБ) |
+| `SPLIT_PART_BYTES` | `2040109465` | Порог авторазделения файлов на части (~1.9 ГБ) |
+| `API_PRESETS` | — | Список пресетов `api_id:api_hash,api_id:api_hash` для быстрого выбора на экране входа |
 
 ---
 
-## Tech stack
+## Получение api_id и api_hash
 
-- **Backend:** Node.js, Express 4, better-sqlite3, GramJS (`telegram`)
-- **Frontend:** Vanilla JS SPA — no framework, no bundler
-- **Imaging:** `sharp` for thumbnails
-- **Archiving:** `archiver` for folder ZIP downloads
+Для взаимодействия с Telegram API требуются ключи приложения:
+
+1. Перейдите на сайт [my.telegram.org](https://my.telegram.org) и войдите в свой аккаунт.
+2. Откройте раздел **API development tools**.
+3. Заполните поля названия и краткого имени приложения (можно указать любые значения).
+4. Скопируйте полученные **`api_id`** (число) и **`api_hash`** (строка).
+5. Их можно ввести при первом подключении или указать в переменной `API_PRESETS` в `.env`.
 
 ---
 
-## How it works
+## Архитектура
 
 ```
-Browser  ──▶  TGWebDrive (Express)  ──▶  Telegram API (GramJS)
-                   │
-                   └─ better-sqlite3 (metadata, users, shares, API keys)
+Браузер  ──▶  TGWebDrive (Express)  ──▶  Telegram API (GramJS)
+                     │
+                     └─ SQLite (метаданные, пользователи, ссылки, ключи)
 ```
 
-Files are never stored on your server's disk — the app streams them straight between the browser and Telegram. Your server only keeps lightweight metadata (filenames, sizes, share links, users) in SQLite.
+Сервер выступает в роли умного потокового шлюза:
+- Содержимое файлов **не хранится** на диске сервера — оно транслируется напрямую между клиентом и серверами Telegram.
+- На сервере хранится только легковесная база SQLite с метаданными (имена файлов, папки, ссылки общего доступа, учётные записи).
 
 ---
 
-## Deployment Notes
+## Стек технологий
 
-TGWebDrive needs a persistent Node.js process. It is not a drop-in deployment for Vercel or Netlify serverless functions because it maintains Telegram sessions, SQLite metadata, streamed uploads/downloads, and long-lived progress connections.
-
-Use a VPS, or a persistent Node.js host such as Railway, Render, or Fly.io. Keep the `data/` directory backed up: it contains the SQLite database, Telegram sessions, and uploaded branding assets. See [INSTALL.md](INSTALL.md) for PM2, reverse proxy, HTTPS, and upload-size configuration.
-
-## Roadmap
-
-- [ ] 2FA / TOTP login for admins
-- [ ] Per-user branding presets
-- [ ] Resume support for large downloads
-- [ ] Share analytics / view counts
-
-Ideas welcome — please open an issue.
+- **Backend:** Node.js, Express, better-sqlite3, GramJS
+- **Frontend:** Vanilla JavaScript (SPA без сборщиков и тяжёлых фреймворков)
+- **Изображения:** sharp (генерация миниатюр)
+- **Архивация:** archiver (потоковое создание ZIP-архивов)
+- **Иконки:** Встроенные SVG (Lucide)
 
 ---
 
-## Contributing
+## Лицензия
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you'd like to change.
-
-```bash
-git clone https://github.com/Sam8r/TGWebDrive.git
-cd TGWebDrive
-npm install
-npm start   # develop at http://localhost:3001
-```
-
----
-
-## Credits
-
-TGWebDrive is made with love by **[Samer Ahmed](https://linktr.ee/thesamgfx)**.
-
-- Built on [GramJS](https://github.com/nicemystery/telegram-mtapi) / [telegram](https://www.npmjs.com/package/telegram)
-- Icons by [Lucide](https://lucide.dev) (MIT)
-- Inspired by the self-hosted community
-
-If this project is useful to you, please star the repo — it helps others find it.
-
----
-
-## License
-
-[MIT](LICENSE) © Samer Ahmed
+Проект распространяется под лицензией [MIT](LICENSE).

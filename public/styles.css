@@ -903,6 +903,10 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
   overflow: hidden;
   cursor: pointer;
 }
+.card-media-wrap.yt-thumb-wrap.is-shorts {
+  aspect-ratio: 9 / 16;
+  max-height: 420px;
+}
 .card-media-wrap.yt-thumb-wrap img {
   width: 100%;
   height: 100%;
@@ -952,6 +956,10 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
   letter-spacing: 0.2px;
   pointer-events: none;
   z-index: 3;
+}
+.yt-pill-badge.yt-shorts-badge {
+  background: #ff0000;
+  box-shadow: 0 2px 8px rgba(255, 0, 0, 0.5);
 }
 .video-dur-badge {
   position: absolute; bottom: 8px; left: 8px; z-index: 2;
@@ -1124,19 +1132,20 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
 .list-sub { font-size: 11.5px; color: var(--muted); }
 .row-actions { display: flex; align-items: center; gap: 4px; flex: none; }
 
-.card-sender-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  color: var(--accent);
-  font-weight: 500;
-}
+.card-sender-tag,
 .row-sender-tag {
   display: inline-flex;
   align-items: center;
   gap: 3px;
   color: var(--accent);
   font-weight: 500;
+  text-decoration: none;
+  transition: opacity 0.15s ease, color 0.15s ease;
+}
+a.card-sender-tag:hover,
+a.row-sender-tag:hover {
+  text-decoration: underline;
+  opacity: 0.85;
 }
 
 .load-more { text-align: center; padding: 22px 16px 28px; }
@@ -1282,6 +1291,7 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
   box-shadow: var(--shadow-lg); animation: pop 0.15s;
 }
 .modal.card-modal { max-width: 480px; }
+.modal.card-modal.modal-shorts { max-width: 430px; }
 .modal-yt-wrap {
   position: relative;
   width: 100%;
@@ -1291,6 +1301,15 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
   overflow: hidden;
   margin-bottom: 8px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+.modal-yt-wrap.is-shorts {
+  aspect-ratio: 9 / 16;
+  height: min(64vh, 520px);
+  width: auto;
+  max-width: 100%;
+  margin: 0 auto 10px;
+  border-radius: 16px;
+  box-shadow: 0 6px 28px rgba(0, 0, 0, 0.5);
 }
 .modal-yt-wrap iframe {
   position: absolute;
@@ -1367,17 +1386,64 @@ label { color: var(--muted); font-size: 12px; font-weight: 600; display: inline-
 .split-sender-head {
   display: flex;
   align-items: center;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--muted);
 }
+.split-sender-head > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.split-sender-hint {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--accent);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 .split-sender-card {
   display: flex;
   align-items: center;
   gap: 12px;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 12px;
+  padding: 4px 6px;
+  margin: -4px -6px;
+  transition: background 0.15s ease;
+}
+.split-sender-card.is-link {
+  cursor: pointer;
+}
+.split-sender-card.is-link:hover {
+  background: var(--bg-hover, rgba(0, 0, 0, 0.04));
+}
+[data-theme="dark"] .split-sender-card.is-link:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.split-sender-arrow {
+  color: var(--muted);
+  opacity: 0.55;
+  transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.split-sender-card.is-link:hover .split-sender-arrow {
+  opacity: 1;
+  color: var(--accent);
+  transform: translateX(2px);
+}
+.split-sender-card.is-link:hover .split-sender-name {
+  color: var(--accent);
 }
 .split-sender-avatar {
   width: 44px;

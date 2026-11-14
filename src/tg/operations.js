@@ -97,10 +97,16 @@ export function extractYouTubeId(url) {
   if (shortMatch) return shortMatch[1];
   const pathMatch = str.match(/youtube\.com\/(?:shorts|embed|v|live)\/([a-zA-Z0-9_-]{11})/i);
   if (pathMatch) return pathMatch[1];
+
   const queryMatch = str.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
   if (queryMatch) return queryMatch[1];
   const anyMatch = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i);
   return anyMatch ? anyMatch[1] : null;
+}
+
+export function isYouTubeShorts(url) {
+  if (!url) return false;
+  return /(?:youtube\.com|youtu\.be)\/shorts\/([a-zA-Z0-9_-]{11})/i.test(String(url));
 }
 
 export function extractSenderInfo(msg, myUserId) {
@@ -166,12 +172,38 @@ export function extractSenderInfo(msg, myUserId) {
     }
   }
 
+  let senderLink = null;
+  if (senderUsername) {
+    const rawUser = senderUsername.replace(/^@/, "").trim();
+    if (rawUser) {
+      if (isFwd && msg.fwdFrom?.channelPost) {
+        senderLink = `https://t.me/${rawUser}/${msg.fwdFrom.channelPost}`;
+      } else {
+        senderLink = `https://t.me/${rawUser}`;
+      }
+    }
+  } else if (isFwd && msg.fwdFrom) {
+    const chanId = msg.fwdFrom.fromId?.channelId || (s?.className === "Channel" ? s.id : null);
+    if (chanId) {
+      if (msg.fwdFrom.channelPost) {
+        senderLink = `https://t.me/c/${chanId}/${msg.fwdFrom.channelPost}`;
+      } else {
+        senderLink = `https://t.me/c/${chanId}`;
+      }
+    } else if (extractedId) {
+      senderLink = `tg://user?id=${extractedId}`;
+    }
+  } else if (extractedId) {
+    senderLink = `tg://user?id=${extractedId}`;
+  }
+
   const sender = (senderName || senderUsername || extractedId)
     ? {
         id: extractedId || (isFwd ? null : senderId),
         name: senderName || (senderUsername ? "@" + senderUsername : "Telegram User"),
         username: senderUsername ? (senderUsername.startsWith("@") ? senderUsername : "@" + senderUsername) : "",
         hasAvatar,
+        link: senderLink,
       }
     : null;
 
@@ -214,6 +246,7 @@ export function serializeMessage(msg, myUserId) {
       domain,
       hasPreview: !!(wp.title || wp.description || hasPhoto || ytThumb),
       previewDescription: wp.description || (msg.message && msg.message.trim() !== url ? msg.message : ""),
+      isShorts: isYouTubeShorts(url),
       isMine,
       canEdit,
       forwarded,
@@ -258,6 +291,7 @@ export function serializeMessage(msg, myUserId) {
         domain,
         hasPreview: !!ytThumb,
         previewDescription: desc,
+        isShorts: isYouTubeShorts(url),
         isMine,
         canEdit,
         forwarded,

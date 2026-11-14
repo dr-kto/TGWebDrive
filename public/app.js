@@ -156,12 +156,64 @@ function extractYouTubeId(url) {
   const str = String(url).trim();
   const shortMatch = str.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/i);
   if (shortMatch) return shortMatch[1];
-  const pathMatch = str.match(/youtube\.com\/(?:shorts|embed|v|live)\/([a-zA-Z0-9_-]{11})/i);
-  if (pathMatch) return pathMatch[1];
   const queryMatch = str.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
   if (queryMatch) return queryMatch[1];
   const anyMatch = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i);
   return anyMatch ? anyMatch[1] : null;
+}
+function isYouTubeShorts(url) {
+  if (!url) return false;
+  return /(?:youtube\.com|youtu\.be)\/shorts\/([a-zA-Z0-9_-]{11})/i.test(String(url));
+}
+
+function senderHref(s) {
+  if (!s) return null;
+  if (s.link) return s.link;
+  if (s.username) {
+    const u = String(s.username).replace(/^@/, "").trim();
+    if (u) return `https://t.me/${encodeURIComponent(u)}`;
+  }
+  if (s.id) {
+    return `tg://user?id=${encodeURIComponent(s.id)}`;
+  }
+  return null;
+}
+
+function senderBoxHtml(f, { extraClass = "", style = "", showCaption = false } = {}) {
+  if (f.isMine || !f.sender) return "";
+  const s = f.sender;
+  const sName = s.name || s.username || "Telegram User";
+  const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
+  const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
+  const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
+  const headLabel = f.forwarded ? "Forwarded from" : (f.kind === "link" ? "Shared by" : "Sent by");
+  const sHref = senderHref(s);
+
+  return `
+    <div class="split-sender-box ${extraClass}" ${style ? `style="${style}"` : ""}>
+      <div class="split-sender-head">
+        <span>${icon(f.forwarded ? "share" : "user", { size: 13 })} ${headLabel}</span>
+        ${sHref ? `<span class="split-sender-hint">${icon("externalLink", { size: 11 })} Open profile</span>` : ""}
+      </div>
+      <${sHref ? `a href="${esc(sHref)}" target="_blank" rel="noopener"` : "div"} class="split-sender-card ${sHref ? "is-link" : ""}" title="${sHref ? `Open ${esc(sName)} in Telegram` : esc(sName)}">
+        <div class="split-sender-avatar">
+          <span class="split-sender-init">${esc(sInit)}</span>
+          ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
+        </div>
+        <div class="split-sender-meta">
+          <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
+          ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
+        </div>
+        ${sHref ? `<div class="split-sender-arrow">${icon("externalLink", { size: 14 })}</div>` : ""}
+      </${sHref ? "a" : "div"}>
+      ${showCaption && f.caption ? `
+        <div class="split-sender-caption">
+          <div class="split-sender-caption-lbl">Caption (read-only)</div>
+          <div class="split-sender-caption-txt">${esc(f.caption)}</div>
+        </div>` : ""}
+      ${showCaption && f.forwarded ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">Telegram does not allow editing captions of forwarded messages.</div>` : ""}
+    </div>
+  `;
 }
 
 /* ===================== Modals & Dialogs ===================== */
@@ -1049,6 +1101,7 @@ window.openFolder = openFolder;
 
 async function loadFiles(reset) {
   if (!state.currentFolder) return;
+  if (!reset && state.loading) return;
   if (reset) {
     state.offsetId = 0;
     state.files = [];
@@ -1062,28 +1115,37 @@ async function loadFiles(reset) {
       btn.innerHTML = `<span class="spinner-sm"></span> Loading…`;
     }
   }
+  let hasError = false;
   try {
     const r = await api(
       `/api/files?folder=${encodeURIComponent(state.currentFolder)}&limit=60${state.offsetId ? `&offsetId=${state.offsetId}` : ""}`
     );
-    state.files = reset ? r.items : [...state.files, ...r.items];
+    if (reset) {
+      state.files = r.items || [];
+    } else {
+      const existingIds = new Set(state.files.map((x) => String(x.id)));
+      const fresh = (r.items || []).filter((x) => !existingIds.has(String(x.id)));
+      state.files = [...state.files, ...fresh];
+    }
     state.offsetId = r.nextOffset;
     if (state.currentFolder === "all" && reset && !state.offsetId) {
       state.allAccountFiles = [...state.files];
     } else if (reset) {
       syncAccountAllFiles();
     }
-    renderSidebar();
-    renderFiles();
   } catch (err) {
+    hasError = true;
     if (reset) {
       $("#content").innerHTML = emptyHtml(err.message, "alert");
     } else {
       toast(err.message);
-      renderFiles();
     }
   } finally {
     state.loading = false;
+    if (!hasError || !reset) {
+      renderSidebar();
+      renderFiles();
+    }
   }
 }
 window.loadFiles = loadFiles;
@@ -1159,7 +1221,7 @@ function getProcessedFiles() {
   if (state.search) {
     const q = state.search.toLowerCase();
     items = items.filter((f) =>
-      `${f.name || ""} ${f.caption || ""} ${f.noteContent || ""} ${f.domain || ""} ${f.url || ""}`.toLowerCase().includes(q)
+      `${f.name || ""} ${f.caption || ""} ${f.noteContent || ""} ${f.domain || ""} ${f.url || ""} ${f.sender?.name || ""} ${f.sender?.username || ""}`.toLowerCase().includes(q)
     );
   }
   items = items.filter((f) => matchesCategory(f, state.category));
@@ -1378,8 +1440,13 @@ function renderCardHtml(f) {
   const thumbSrc = authUrl(f.thumbUrl || `/api/files/${f.id}/thumb?folder=${folderQuery}`);
   const mpTag = f.multipart ? `<span class="mp-badge">${icon("layers", { size: 10 })} ${f.partsCount}</span>` : "";
   const moreMobile = `<button class="card-more-mobile" title="Actions" onclick="event.stopPropagation();openFileMoreMenu(this,'${f.id}')">${icon("moreH", { size: 15 })}</button>`;
+  const sHref = (!f.isMine && f.sender) ? senderHref(f.sender) : null;
+  const sTitle = f.forwarded ? "Forwarded from" : "Sent by";
+  const sNameDisplay = f.sender ? (f.sender.username || f.sender.name) : "";
   const senderChip = (!f.isMine && f.sender)
-    ? `<span>·</span><span class="card-sender-tag" title="${f.forwarded ? "Forwarded from" : "Sent by"} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} ${esc(f.sender.username || f.sender.name)}</span>`
+    ? `<span>·</span>${sHref
+        ? `<a class="card-sender-tag" href="${esc(sHref)}" target="_blank" rel="noopener" title="${sTitle} ${esc(f.sender.name || f.sender.username)} (Open profile)" onclick="event.stopPropagation()">${icon(f.forwarded ? "share" : "user", { size: 10 })} <span>${esc(sNameDisplay)}</span></a>`
+        : `<span class="card-sender-tag" title="${sTitle} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} <span>${esc(sNameDisplay)}</span></span>`}`
     : "";
 
   if (f.kind === "note") {
@@ -1397,17 +1464,18 @@ function renderCardHtml(f) {
   if (f.kind === "link") {
     const ytId = extractYouTubeId(f.url);
     const isYt = !!ytId;
+    const isShorts = isYt && Boolean(f.isShorts || isYouTubeShorts(f.url));
     let previewMedia = "";
     if (ytId) {
       const ytThumb = `https://i.ytimg.com/vi/${esc(ytId)}/hqdefault.jpg`;
       const fallbackThumb = `https://img.youtube.com/vi/${esc(ytId)}/hqdefault.jpg`;
       previewMedia = `
-        <div class="card-media-wrap yt-thumb-wrap">
-          <img src="${ytThumb}" alt="${esc(f.name || "YouTube video")}" loading="lazy" onerror="if(this.src!=='${fallbackThumb}')this.src='${fallbackThumb}'" />
+        <div class="card-media-wrap yt-thumb-wrap ${isShorts ? "is-shorts" : ""}">
+          <img src="${ytThumb}" alt="${esc(f.name || (isShorts ? "YouTube Short" : "YouTube video"))}" loading="lazy" onerror="if(this.src!=='${fallbackThumb}')this.src='${fallbackThumb}'" />
           <div class="yt-play-btn-card">
             <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
           </div>
-          <span class="yt-pill-badge">${icon("play", { size: 10 })} YouTube</span>
+          <span class="yt-pill-badge ${isShorts ? "yt-shorts-badge" : ""}">${icon("play", { size: 10 })} ${isShorts ? "Shorts" : "YouTube"}</span>
         </div>
       `;
     } else {
@@ -1416,12 +1484,12 @@ function renderCardHtml(f) {
         previewMedia = `<div class="card-media-wrap link-media"><img src="${esc(linkThumb)}" alt="" loading="lazy" onerror="this.parentNode.style.display='none'" /></div>`;
       }
     }
-    return `<div class="card ${sel} ${isYt ? "card-yt" : ""}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
+    return `<div class="card ${sel} ${isYt ? "card-yt" : ""} ${isShorts ? "card-yt-shorts" : ""}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
       <div class="card-sel">${icon("check", { size: 12 })}</div>
       ${cardActionsHtml(f)}${moreMobile}
       ${previewMedia}
       <div class="card-body">
-        <div class="link-domain-row">${icon(isYt ? "play" : "globe", { size: 12 })}<span>${esc(f.domain || (isYt ? "youtube.com" : "link"))}</span></div>
+        <div class="link-domain-row">${icon(isYt ? "play" : "globe", { size: 12 })}<span>${esc(f.domain || (isShorts ? "YouTube Shorts" : (isYt ? "youtube.com" : "link")))}</span></div>
         <div class="card-title">${esc(f.name || f.url)}</div>
         ${f.previewDescription ? `<div class="link-desc">${esc(f.previewDescription)}</div>` : ""}
         <div class="card-meta"><span>${fmtDate(f.date)}</span>${senderChip}</div>
@@ -1495,15 +1563,20 @@ function renderListRowHtml(f) {
     ? `<img src="${esc(f.kind === "link" ? linkThumb : thumbSrc)}" alt="" loading="lazy" onerror="this.remove()" />`
     : fileIcon(f.kind, 20);
   const mpTag = f.multipart ? `<span class="mp-badge">${icon("layers", { size: 10 })} ${f.partsCount}</span>` : "";
+  const sHref = (!f.isMine && f.sender) ? senderHref(f.sender) : null;
+  const sTitle = f.forwarded ? "Forwarded from" : "Sent by";
+  const sNameDisplay = f.sender ? (f.sender.username || f.sender.name) : "";
   const senderTag = (!f.isMine && f.sender)
-    ? ` · <span class="row-sender-tag" title="${f.forwarded ? "Forwarded from" : "Sent by"} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} ${esc(f.sender.username || f.sender.name)}</span>`
+    ? ` · ${sHref
+        ? `<a class="row-sender-tag" href="${esc(sHref)}" target="_blank" rel="noopener" title="${sTitle} ${esc(f.sender.name || f.sender.username)} (Open profile)" onclick="event.stopPropagation()">${icon(f.forwarded ? "share" : "user", { size: 10 })} <span>${esc(sNameDisplay)}</span></a>`
+        : `<span class="row-sender-tag" title="${sTitle} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} <span>${esc(sNameDisplay)}</span></span>`}`
     : "";
 
   return `<div class="list-row ${sel}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
     <div class="list-thumb">${thumb}</div>
     <div class="list-main">
       <div class="list-nm">${esc(titleText)} ${mpTag}</div>
-      <div class="list-sub">${f.kind === "link" ? esc(f.domain || f.url) : fmtSize(f.size)} · ${fmtDate(f.date)}${senderTag}</div>
+      <div class="list-sub">${f.kind === "link" ? esc((f.isShorts || isYouTubeShorts(f.url)) ? "YouTube Shorts" : (f.domain || f.url)) : fmtSize(f.size)} · ${fmtDate(f.date)}${senderTag}</div>
     </div>
     ${listRowActionsHtml(f)}
   </div>`;
@@ -1523,7 +1596,10 @@ function estimateCardWeight(f) {
     return Math.min(1.6, Math.max(0.6, ratio)) * 180 + 68;
   }
   if (f.kind === "link") {
-    if (extractYouTubeId(f.url)) return 210;
+    if (extractYouTubeId(f.url)) {
+      const isShorts = Boolean(f.isShorts || isYouTubeShorts(f.url));
+      return isShorts ? 360 : 210;
+    }
     if (f.thumbUrl || f.hasThumb) return 220;
     return 130;
   }
@@ -1851,32 +1927,9 @@ function previewFile(id) {
   if (f.kind === "note") {
     const isMine = f.isMine !== false;
     const canEdit = f.canEdit !== undefined ? f.canEdit : isMine;
-    let senderNoteHtml = "";
-    if (!isMine && f.sender) {
-      const s = f.sender;
-      const sName = s.name || s.username || "Telegram User";
-      const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
-      const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
-      const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
-      const headLabel = f.forwarded ? "Forwarded from" : "Sent by";
-      senderNoteHtml = `
-        <div class="split-sender-box" style="margin-bottom:12px">
-          <div class="split-sender-head">${icon(f.forwarded ? "share" : "user", { size: 13 })} ${headLabel}</div>
-          <div class="split-sender-card">
-            <div class="split-sender-avatar">
-              <span class="split-sender-init">${esc(sInit)}</span>
-              ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
-            </div>
-            <div class="split-sender-meta">
-              <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
-              ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
-            </div>
-          </div>
-        </div>
-      `;
-    }
+    const senderNoteHtml = senderBoxHtml(f, { style: "margin-bottom:12px" });
     const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal card-modal">
-      <div class="head"><div class="t">${fileIcon("note", 18)} <span>${esc(f.name)}</span></div>
+      <div class="head"><div class="t">${fileIcon("note", 18)} <span>Note</span></div>
         <button class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
       <div class="body">
         ${senderNoteHtml}
@@ -1898,6 +1951,7 @@ function previewFile(id) {
         const txt = modal.querySelector("#noteEditBody").value;
         await api(`/api/files/${f.id}?folder=${folderParamFor(f)}`, { method: "PATCH", body: JSON.stringify({ noteContent: txt }) });
         f.noteContent = txt;
+        f.name = (txt.split("\n")[0] || "Note").slice(0, 64);
         modal.remove();
         renderFiles();
         toast("Note saved");
@@ -1908,57 +1962,32 @@ function previewFile(id) {
 
   if (f.kind === "link") {
     const isMine = f.isMine !== false;
-    let senderLinkHtml = "";
-    if (!isMine && f.sender) {
-      const s = f.sender;
-      const sName = s.name || s.username || "Telegram User";
-      const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
-      const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
-      const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
-      senderLinkHtml = `
-        <div class="split-sender-box" style="margin-bottom:12px">
-          <div class="split-sender-head">${icon("user", { size: 13 })} Shared by</div>
-          <div class="split-sender-card">
-            <div class="split-sender-avatar">
-              <span class="split-sender-init">${esc(sInit)}</span>
-              ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
-            </div>
-            <div class="split-sender-meta">
-              <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
-              ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
-            </div>
-          </div>
-        </div>
-      `;
-    }
+    const senderLinkHtml = senderBoxHtml(f, { style: "margin-bottom:12px" });
     const ytId = extractYouTubeId(f.url);
+    const isShorts = ytId && Boolean(f.isShorts || isYouTubeShorts(f.url));
     const linkThumb = f.thumbUrl || (f.hasThumb ? authUrl(`/api/files/${f.id}/thumb?folder=${folderParamFor(f)}`) : null);
     let mediaHtml = "";
     if (ytId) {
       const ytEmbedUrl = `https://www.youtube.com/embed/${esc(ytId)}?autoplay=1&enablejsapi=1&rel=0&playsinline=1`;
-      const ytDirectUrl = f.url || `https://www.youtube.com/watch?v=${esc(ytId)}`;
+      const ytDirectUrl = f.url || (isShorts ? `https://www.youtube.com/shorts/${esc(ytId)}` : `https://www.youtube.com/watch?v=${esc(ytId)}`);
       const ytThumb = `https://i.ytimg.com/vi/${esc(ytId)}/hqdefault.jpg`;
       mediaHtml = `
-        <div class="modal-yt-wrap" style="background-image:url('${ytThumb}');background-size:cover;background-position:center">
+        <div class="modal-yt-wrap ${isShorts ? "is-shorts" : ""}" style="background-image:url('${ytThumb}');background-size:cover;background-position:center">
           <iframe
             src="${ytEmbedUrl}"
-            title="${esc(f.name || "YouTube video")}"
+            title="${esc(f.name || (isShorts ? "YouTube Short" : "YouTube video"))}"
             loading="eager"
             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
             referrerpolicy="strict-origin-when-cross-origin"
             allowfullscreen>
           </iframe>
         </div>
-        <div class="modal-yt-fallback">
-          <span>${icon("play", { size: 13 })} Video not starting?</span>
-          <a href="${esc(ytDirectUrl)}" target="_blank" rel="noopener">Watch on YouTube ↗</a>
-        </div>
       `;
     } else if (linkThumb) {
       mediaHtml = `<img src="${esc(linkThumb)}" style="width:100%;max-height:260px;object-fit:cover;border-radius:12px;margin-bottom:12px" onerror="this.style.display='none'\" />`;
     }
-    const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal card-modal">
-      <div class="head"><div class="t">${icon(ytId ? "play" : "link", { size: 18 })} <span>${esc(f.domain || (ytId ? "YouTube" : "Link"))}</span></div>
+    const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal card-modal ${isShorts ? "modal-shorts" : ""}">
+      <div class="head"><div class="t">${icon(ytId ? "play" : "link", { size: 18 })} <span>${esc(f.domain || (isShorts ? "YouTube Shorts" : (ytId ? "YouTube" : "Link")))}</span></div>
         <button class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
       <div class="body">
         ${mediaHtml}
@@ -1969,7 +1998,7 @@ function previewFile(id) {
         <div class="form-actions">
           <button class="btn-2 danger" id="lnkDelBtn">${icon("trash", { size: 14 })} Delete</button>
           <div class="spacer"></div>
-          <a class="primary" href="${esc(f.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "#"))}" target="_blank" rel="noopener">${icon(ytId ? "play" : "externalLink", { size: 15 })} ${ytId ? "Watch on YouTube" : "Open link"}</a>
+          <a class="primary" href="${esc(f.url || (ytId ? (isShorts ? `https://www.youtube.com/shorts/${ytId}` : `https://www.youtube.com/watch?v=${ytId}`) : "#"))}" target="_blank" rel="noopener">${icon(ytId ? "play" : "externalLink", { size: 15 })} ${isShorts ? "Watch Shorts" : (ytId ? "Watch on YouTube" : "Open link")}</a>
         </div>
       </div>
     </div></div>`);
@@ -2027,33 +2056,7 @@ function previewFile(id) {
       <button class="btn-2" id="saveCapBtn">${icon("check", { size: 14 })} Save caption</button>
     `;
   } else {
-    const s = f.sender || {};
-    const sName = s.name || s.username || "Telegram User";
-    const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
-    const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
-    const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
-    const headLabel = f.forwarded ? "Forwarded from" : "Sent by";
-    captionOrSenderHtml = `
-      <div class="split-sender-box">
-        <div class="split-sender-head">${icon(f.forwarded ? "share" : "user", { size: 13 })} ${headLabel}</div>
-        <div class="split-sender-card">
-          <div class="split-sender-avatar">
-            <span class="split-sender-init">${esc(sInit)}</span>
-            ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
-          </div>
-          <div class="split-sender-meta">
-            <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
-            ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
-          </div>
-        </div>
-        ${f.caption ? `
-          <div class="split-sender-caption">
-            <div class="split-sender-caption-lbl">Caption (read-only)</div>
-            <div class="split-sender-caption-txt">${esc(f.caption)}</div>
-          </div>` : ""}
-        ${f.forwarded ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Telegram does not allow editing captions of forwarded messages.</div>` : ""}
-      </div>
-    `;
+    captionOrSenderHtml = senderBoxHtml(f, { showCaption: true });
   }
 
   const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal split-modal">

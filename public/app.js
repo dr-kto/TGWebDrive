@@ -487,7 +487,7 @@ function renderSetup() {
   $("#app").innerHTML = authShell("Welcome", "Create the admin account to manage this drive.", `
   <form id="setupForm">
     <div class="field"><label>Admin username</label>
-      <div class="input-wrap">${icon("user", { size: 16, cls: "lead" })}<input id="un" required autocomplete="username" autofocus placeholder="bakhtrv" /></div></div>
+      <div class="input-wrap">${icon("user", { size: 16, cls: "lead" })}<input id="un" required autocomplete="username" autofocus placeholder="username" /></div></div>
     <div class="field"><label>Admin password</label>
       <div class="input-wrap">${icon("lock", { size: 16, cls: "lead" })}<input type="password" id="pw" required minlength="4" autocomplete="new-password" placeholder="Choose a password" /></div></div>
     <div class="field"><label>Confirm password</label>

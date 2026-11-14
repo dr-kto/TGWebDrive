@@ -211,7 +211,6 @@ function senderBoxHtml(f, { extraClass = "", style = "", showCaption = false } =
           <div class="split-sender-caption-lbl">Caption (read-only)</div>
           <div class="split-sender-caption-txt">${esc(f.caption)}</div>
         </div>` : ""}
-      ${showCaption && f.forwarded ? `<div style="margin-top:6px;font-size:11px;color:var(--muted)">Telegram does not allow editing captions of forwarded messages.</div>` : ""}
     </div>
   `;
 }

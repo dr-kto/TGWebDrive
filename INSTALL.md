@@ -1,6 +1,6 @@
 # Installation & Deployment Guide
 
-This guide takes you from a fresh Linux server to a live, HTTPS-secured TGWebDrive instance.
+This guide takes you from a fresh Linux server to a live, HTTPS-secured TGDisk instance.
 
 > In a hurry? See **Quick start** in the [README](README.md).
 
@@ -22,7 +22,7 @@ This guide takes you from a fresh Linux server to a live, HTTPS-secured TGWebDri
 
 ## 2. Get your Telegram API credentials
 
-TGWebDrive talks to Telegram through the official API.
+TGDisk talks to Telegram through the official API.
 
 1. Go to <https://my.telegram.org> → **API development tools**
 2. Fill in any app name/short name (they can be anything)
@@ -37,8 +37,8 @@ You'll paste these into the app the first time you connect a Telegram account. Y
 ## 3. Clone & install
 
 ```bash
-git clone https://github.com/dr-kto/TGWebDrive.git
-cd TGWebDrive
+git clone https://github.com/dr-kto/TGDisk.git
+cd TGDisk
 npm install
 ```
 
@@ -112,7 +112,7 @@ pm2 logs tgdrive
 
 ## 6. Put it behind a reverse proxy + HTTPS
 
-Keep TGWebDrive bound to `127.0.0.1:3001` and expose it to the world through a reverse proxy with TLS.
+Keep TGDisk bound to `127.0.0.1:3001` and expose it to the world through a reverse proxy with TLS.
 
 ### Apache (httpd)
 
@@ -215,7 +215,7 @@ Open `https://drive.example.com`, create your admin account, and connect Telegra
 ## 8. Updating
 
 ```bash
-cd TGWebDrive
+cd TGDisk
 git pull
 npm install            # in case dependencies changed
 pm2 restart tgdrive
@@ -248,4 +248,4 @@ Files themselves are in your Telegram account, so they're as safe as your Telegr
 
 ---
 
-Need help? Open an issue at <https://github.com/dr-kto/TGWebDrive/issues>.
+Need help? Open an issue at <https://github.com/dr-kto/TGDisk/issues>.

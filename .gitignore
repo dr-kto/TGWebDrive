@@ -3,6 +3,7 @@ node_modules/
 data/
 *.log
 .DS_Store
+reference/
 
 # opencode / agents
 .opencode/

@@ -42,7 +42,7 @@ export const config = {
   port: Number(process.env.PORT) || 3001,
   host: process.env.HOST || "127.0.0.1",
   secret: readOrCreateSecret(),
-  publicUrl: (process.env.PUBLIC_URL || "https://drive.dotplushq.online").replace(/\/$/, ""),
+  publicUrl: (process.env.PUBLIC_URL || "").replace(/\/$/, ""),
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
   // Telegram caps a single non-premium upload at ~2 GiB. Anything larger is
   // transparently split into <=2 GiB parts on disk and reassembled on download.

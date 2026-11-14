@@ -1,39 +1,44 @@
 {
-  "name": "tgdrive-web",
-  "version": "1.0.0",
+  "name": "react-example",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
-  "description": "Self-hosted, brandable cloud drive that uses Telegram as infinite free storage. Multi-user, public share links, streaming, REST API.",
-  "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "dev": "node src/server.js",
+    "start": "node src/server.js",
+    "build": "node --check src/server.js && node --check public/app.js && node --check public/icons.js",
+    "clean": "rm -rf data/*.db*",
+    "lint": "node --check src/server.js && node --check src/config.js && node --check src/db.js && node --check src/jobs.js && node --check src/thumb.js && node --check src/middleware.js && node --check src/util.js && node --check src/routes/api.js && node --check src/routes/auth.js && node --check src/routes/branding.js && node --check src/routes/files.js && node --check src/routes/folders.js && node --check src/routes/share.js && node --check src/routes/stats.js && node --check src/tg/manager.js && node --check src/tg/operations.js && node --check public/app.js && node --check public/icons.js && node --check public/sw.js"
   },
-  "engines": {
-    "node": ">=20"
-  },
-  "keywords": [
-    "telegram",
-    "cloud-storage",
-    "self-hosted",
-    "drive",
-    "gramjs",
-    "file-sharing",
-    "telegram-api",
-    "unlimited-storage",
-    "express",
-    "brandable"
-  ],
-  "license": "MIT",
   "dependencies": {
-    "archiver": "^7.0.1",
-    "better-sqlite3": "^11.9.1",
-    "compression": "^1.7.5",
+    "@google/genai": "^2.4.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "archiver": "^8.0.0",
+    "big-integer": "^1.6.52",
+    "compression": "^1.8.2",
     "cookie-parser": "^1.4.7",
-    "dotenv": "^16.4.7",
+    "dotenv": "^17.2.3",
     "express": "^4.21.2",
-    "mime-types": "^2.1.35",
+    "lucide-react": "^0.546.0",
+    "mime-types": "^3.0.2",
+    "motion": "^12.23.24",
     "qrcode": "^1.5.4",
-    "sharp": "^0.35.3",
-    "telegram": "^2.26.0"
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
+    "sharp": "^0.35.5",
+    "telegram": "^2.26.22",
+    "vite": "^8.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "^7.0.2",
+    "@types/express": "^4.17.21"
   }
 }

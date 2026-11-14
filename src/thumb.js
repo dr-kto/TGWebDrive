@@ -12,7 +12,10 @@ export function thumbCachePath(key) {
 
 // Generate a small JPEG thumbnail from an image path or buffer.
 export async function generateThumb(input, outPath) {
-  const pipeline = sharp(input, { failOn: "none" }).rotate().resize(480, 480, { fit: "inside", withoutEnlargement: true }).jpeg({ quality: 78 });
+  const pipeline = sharp(input, { failOn: "none" })
+    .rotate()
+    .resize(480, 480, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 78 });
   if (outPath) {
     await pipeline.toFile(outPath);
     return outPath;

@@ -6,7 +6,7 @@ import QRCode from "qrcode";
 
 const OPTS = { connectionRetries: 5, useWSS: true, retryDelay: 1000, autoReconnect: true };
 
-// accountId -> { client, promise, lastUsed }
+// accountId -> { client, lastUsed }
 const clients = new Map();
 // tempToken -> { client, apiId, apiHash, phone, phoneCodeHash, createdAt }
 const logins = new Map();
@@ -27,7 +27,7 @@ export async function getConnectedClient(accountId) {
     try {
       if (!entry.client.connected) await entry.client.connect();
       return entry.client;
-    } catch (e) {
+    } catch {
       clients.delete(accountId);
     }
   }
@@ -35,7 +35,6 @@ export async function getConnectedClient(accountId) {
   if (!acc) throw new HttpError(404, "Account not found");
   const client = buildSession(acc.session, acc.api_id, acc.api_hash);
   await connect(client);
-  // verify session still valid
   let ok = false;
   try {
     ok = await client.isUserAuthorized();
@@ -67,7 +66,59 @@ export class HttpError extends Error {
   }
 }
 
-/* ---------------- Login flow ---------------- */
+function saveOrUpdateAccount(client, apiId, apiHash, fallbackPhone = "") {
+  return (async () => {
+    const me = await client.getMe();
+    const sessionStr = client.session.save();
+    const now = Date.now();
+    const label = [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || me.phone || fallbackPhone || "Account";
+    const userId = String(me.id);
+    const phone = me.phone || fallbackPhone || "";
+    const username = me.username || null;
+    const isPremium = me.premium ? 1 : 0;
+
+    const existing = stmt.listAccounts.all().find((a) => a.user_id === userId);
+    if (existing) {
+      dropClient(existing.id);
+      stmt.updateAccount.run({
+        id: existing.id,
+        session: sessionStr,
+        is_premium: isPremium,
+        label,
+        user_id: userId,
+        username,
+      });
+      stmt.touchAccount.run(now, existing.id);
+      clients.set(existing.id, { client, lastUsed: now });
+      return {
+        id: existing.id,
+        me: { name: label, username, phone, premium: !!me.premium },
+      };
+    }
+
+    const id = uid();
+    stmt.addAccount.run({
+      id,
+      label,
+      phone,
+      user_id: userId,
+      username,
+      api_id: apiId,
+      api_hash: apiHash,
+      session: sessionStr,
+      is_premium: isPremium,
+      created_at: now,
+      last_used_at: now,
+    });
+    clients.set(id, { client, lastUsed: now });
+    return {
+      id,
+      me: { name: label, username, phone, premium: !!me.premium },
+    };
+  })();
+}
+
+/* ---------------- Phone Login flow ---------------- */
 
 export async function beginLogin(apiId, apiHash, phone) {
   apiId = Number(apiId);
@@ -114,15 +165,22 @@ export async function beginQrLogin(apiId, apiHash) {
   }
 
   if (tokenData.className === "auth.LoginTokenSuccess") {
-    const acct = await _finalizeQr(client, apiId, apiHash);
+    const acct = await saveOrUpdateAccount(client, apiId, apiHash);
     return { tempToken, done: true, accountId: acct.id };
   }
 
   const qrDataUrl = await _tokenToQr(tokenData.token);
   const entry = {
-    client, apiId, apiHash,
-    createdAt: Date.now(), done: false, accountId: null,
-    error: null, needs2FA: false, qrDataUrl, me: null,
+    client,
+    apiId,
+    apiHash,
+    createdAt: Date.now(),
+    done: false,
+    accountId: null,
+    error: null,
+    needs2FA: false,
+    qrDataUrl,
+    me: null,
     expiresAt: tokenData.expires * 1000,
   };
   qrLogins.set(tempToken, entry);
@@ -130,39 +188,14 @@ export async function beginQrLogin(apiId, apiHash) {
   return { tempToken, qrDataUrl, expiresIn: tokenData.expires - Math.floor(Date.now() / 1000) };
 }
 
-async function _tokenToQr(token) {
-  const b64 = Buffer.from(token).toString("base64url");
+async function _tokenToQr(tok) {
+  const b64 = Buffer.from(tok).toString("base64url");
   return QRCode.toDataURL(`tg://login?token=${b64}`, {
-    width: 280, margin: 2,
+    width: 280,
+    margin: 2,
     color: { dark: "#000000", light: "#ffffff" },
     errorCorrectionLevel: "M",
   });
-}
-
-async function _finalizeQr(client, apiId, apiHash) {
-  const me = await client.getMe();
-  const sessionStr = client.session.save();
-  const id = uid();
-  const now = Date.now();
-  stmt.addAccount.run({
-    id,
-    label: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || me.phone || "Account",
-    phone: me.phone || "",
-    user_id: String(me.id),
-    username: me.username || null,
-    api_id: apiId, api_hash: apiHash,
-    session: sessionStr,
-    is_premium: me.premium ? 1 : 0,
-    created_at: now, last_used_at: now,
-  });
-  clients.set(id, { client, lastUsed: now });
-  return {
-    id,
-    me: {
-      name: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || me.phone || "Account",
-      username: me.username || null, phone: me.phone || "", premium: !!me.premium,
-    },
-  };
 }
 
 async function _pollQr(tempToken, entry) {
@@ -176,35 +209,59 @@ async function _pollQr(tempToken, entry) {
         new Api.auth.ExportLoginToken({ apiId, apiHash, exceptIds: [] })
       );
       if (r.className === "auth.LoginTokenSuccess") {
-        const acct = await _finalizeQr(client, apiId, apiHash);
-        entry.accountId = acct.id; entry.me = acct.me; entry.done = true;
+        const acct = await saveOrUpdateAccount(client, apiId, apiHash);
+        entry.accountId = acct.id;
+        entry.me = acct.me;
+        entry.done = true;
         return;
       }
       if (r.className === "auth.LoginTokenMigrateTo") {
         await client._switchDC(r.dcId);
-        try { await client.invoke(new Api.auth.ImportLoginToken({ token: r.token })); }
-        catch (e2) {
-          if (e2.errorMessage === "SESSION_PASSWORD_NEEDED") { entry.needs2FA = true; return; }
+        try {
+          await client.invoke(new Api.auth.ImportLoginToken({ token: r.token }));
+        } catch (e2) {
+          if (e2.errorMessage === "SESSION_PASSWORD_NEEDED") {
+            entry.needs2FA = true;
+            return;
+          }
           throw e2;
         }
-        const acct = await _finalizeQr(client, apiId, apiHash);
-        entry.accountId = acct.id; entry.me = acct.me; entry.done = true;
+        const acct = await saveOrUpdateAccount(client, apiId, apiHash);
+        entry.accountId = acct.id;
+        entry.me = acct.me;
+        entry.done = true;
         return;
       }
-      if (r.token) { entry.qrDataUrl = await _tokenToQr(r.token); entry.expiresAt = r.expires * 1000; }
+      if (r.token) {
+        entry.qrDataUrl = await _tokenToQr(r.token);
+        entry.expiresAt = r.expires * 1000;
+      }
     } catch (e) {
-      if (e.errorMessage === "SESSION_PASSWORD_NEEDED") { entry.needs2FA = true; return; }
+      if (e.errorMessage === "SESSION_PASSWORD_NEEDED") {
+        entry.needs2FA = true;
+        return;
+      }
     }
   }
-  if (qrLogins.has(tempToken) && !entry.done) { entry.error = "QR login timed out"; entry.done = true; }
+  if (qrLogins.has(tempToken) && !entry.done) {
+    entry.error = "QR login timed out";
+    entry.done = true;
+  }
 }
 
 export function checkQrLogin(tempToken) {
   const e = qrLogins.get(tempToken);
   if (!e) throw new HttpError(400, "QR session expired");
-  if (e.error) { qrLogins.delete(tempToken); throw new HttpError(400, e.error); }
+  if (e.error) {
+    qrLogins.delete(tempToken);
+    throw new HttpError(400, e.error);
+  }
   if (e.needs2FA) return { done: false, needs2FA: true };
-  if (e.done && e.accountId) { const r = { done: true, accountId: e.accountId, me: e.me }; qrLogins.delete(tempToken); return r; }
+  if (e.done && e.accountId) {
+    const r = { done: true, accountId: e.accountId, me: e.me };
+    qrLogins.delete(tempToken);
+    return r;
+  }
   return { done: false, qrDataUrl: e.qrDataUrl };
 }
 
@@ -214,7 +271,7 @@ export async function submitQr2FA(tempToken, password) {
   if (!e.needs2FA) throw new HttpError(400, "2FA not required");
   try {
     await do2FA(e.client, password);
-    const acct = await _finalizeQr(e.client, e.apiId, e.apiHash);
+    const acct = await saveOrUpdateAccount(e.client, e.apiId, e.apiHash);
     const r = { done: true, accountId: acct.id, me: acct.me };
     qrLogins.delete(tempToken);
     return r;
@@ -226,7 +283,10 @@ export async function submitQr2FA(tempToken, password) {
 
 export function cancelQrLogin(tempToken) {
   const e = qrLogins.get(tempToken);
-  if (e) { safeDisconnect(e.client); qrLogins.delete(tempToken); }
+  if (e) {
+    safeDisconnect(e.client);
+    qrLogins.delete(tempToken);
+  }
 }
 
 export async function resendCode(tempToken) {
@@ -261,26 +321,9 @@ export async function finishLogin(tempToken, code, password) {
       await do2FA(client, password);
     }
 
-    const me = await client.getMe();
-    const sessionStr = client.session.save();
-    const id = uid();
-    const now = Date.now();
-    stmt.addAccount.run({
-      id,
-      label: [me.firstName, me.lastName].filter(Boolean).join(" ") || me.username || phone || "Account",
-      phone,
-      user_id: String(me.id),
-      username: me.username || null,
-      api_id: apiId,
-      api_hash: apiHash,
-      session: sessionStr,
-      is_premium: me.premium ? 1 : 0,
-      created_at: now,
-      last_used_at: now,
-    });
-    clients.set(id, { client, lastUsed: now });
+    const acct = await saveOrUpdateAccount(client, apiId, apiHash, phone);
     logins.delete(tempToken);
-    return { id, me: { name: stmt.getAccount.get(id).label, username: me.username || null, phone, premium: !!me.premium } };
+    return acct;
   } catch (e) {
     if (e instanceof HttpError) throw e;
     throw mapTgError(e);
@@ -322,7 +365,8 @@ function mapTgError(e) {
     return new HttpError(429, `Telegram asks to wait ${s}s before retrying`);
   }
   if (msg.includes("PHONE_NUMBER_INVALID")) return new HttpError(400, "Phone number is invalid");
-  if (msg.includes("API_ID_INVALID")) return new HttpError(400, "API ID / API hash are invalid");
+  if (msg.includes("API_ID_INVALID") || msg.includes("API_ID_PUBLISHED_FLOOD"))
+    return new HttpError(400, "API ID / API hash are invalid");
   if (msg.includes("PHONE_CODE_INVALID")) return new HttpError(400, "Wrong login code");
   if (msg.includes("PHONE_CODE_EXPIRED")) return new HttpError(400, "Login code expired. Request a new one.");
   if (msg.includes("PASSWORD_HASH_INVALID")) return new HttpError(400, "Wrong 2FA password");

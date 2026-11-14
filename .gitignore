@@ -4,12 +4,3 @@ data/
 *.log
 .DS_Store
 reference/
-
-# opencode / agents
-.opencode/
-AGENTS.md
-
-# speckit
-.speckit/
-speckit.json
-speckit.config.*

@@ -37,7 +37,7 @@ folders.get("/folders", requireAppAuth, requireAccount, (req, res) => {
 
 folders.post("/folders", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
-    const title = String(req.body?.title || "").trim();
+    const title = String(req.body?.title || req.body?.name || "").trim();
     if (!title) return res.status(400).json({ error: "Folder name required" });
     const parentId = req.body?.parentId ? String(req.body.parentId) : null;
     if (parentId) {
@@ -73,23 +73,33 @@ folders.get("/chats", requireAppAuth, requireAccount, async (req, res, next) => 
 });
 
 folders.post("/folders/import", requireAppAuth, requireAccount, (req, res) => {
-  const { channelId, accessHash, title } = req.body || {};
-  if (!channelId || accessHash == null || !title) return res.status(400).json({ error: "channelId, accessHash, title required" });
+  const { channelId, accessHash, title, type } = req.body || {};
+  if (!channelId || accessHash == null || !title) {
+    return res.status(400).json({ error: "channelId, accessHash, title required" });
+  }
+  const peerObj =
+    type === "chat"
+      ? { kind: "chat", chatId: String(channelId) }
+      : { kind: "channel", channelId: String(channelId), accessHash: String(accessHash) };
+  const peerJson = JSON.stringify(peerObj);
+  const existing = stmt.foldersFor.all(req.accountId).find((f) => f.peer_json === peerJson);
+  if (existing) {
+    return res.json({ ok: true, id: existing.id, title: existing.title });
+  }
   const id = uid();
   stmt.addFolder.run({
     id,
     account_id: req.accountId,
     parent_id: null,
-    title,
-    peer_json: JSON.stringify({ kind: "channel", channelId: String(channelId), accessHash: String(accessHash) }),
+    title: String(title),
+    peer_json: peerJson,
     kind: "channel",
     created_at: Date.now(),
   });
-  res.json({ ok: true, id, title });
+  res.json({ ok: true, id, title: String(title) });
 });
 
 folders.delete("/folders/:id", requireAppAuth, requireAccount, (req, res) => {
-  // Recursively remove descendant subfolders so nothing is orphaned.
   const all = stmt.foldersFor.all(req.accountId);
   const childrenOf = (pid) => all.filter((f) => f.parent_id === pid).map((f) => f.id);
   const stack = [req.params.id];

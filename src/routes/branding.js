@@ -12,13 +12,27 @@ const LOGO_FILE = path.join(DATA_DIR, "branding-logo");
 const LOGO_MIME_KEY = "branding_logo_mime";
 
 const DEFAULTS = {
-  name: "Telegram Drive",
-  accent: "#4f8cff",
+  name: "Telegram Disk",
+  accent: "#2E7CF6",
   tagline: "Secure file sharing",
   copyright: "",
+  viewMode: "masonry",
+  preferences: {
+    chunkSize: "2mb",
+    wifiAutoDownload: true,
+    hdThumbnails: true,
+  },
 };
 
-const ALLOWED_LOGO = new Set(["image/png", "image/jpeg", "image/webp", "image/svg+xml", "image/gif", "image/x-icon", "image/vnd.microsoft.icon"]);
+const ALLOWED_LOGO = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+  "image/svg+xml",
+  "image/gif",
+  "image/x-icon",
+  "image/vnd.microsoft.icon",
+]);
 const MAX_LOGO = 2 * 1024 * 1024;
 
 function readBranding() {
@@ -28,7 +42,11 @@ function readBranding() {
   } catch {
     parsed = {};
   }
-  return { ...DEFAULTS, ...parsed };
+  return {
+    ...DEFAULTS,
+    ...parsed,
+    preferences: { ...DEFAULTS.preferences, ...(parsed.preferences || {}) },
+  };
 }
 
 function logoVersion() {
@@ -47,11 +65,12 @@ function publicBranding() {
     accent: b.accent,
     tagline: b.tagline,
     copyright: b.copyright,
+    viewMode: b.viewMode,
+    preferences: b.preferences,
     logo: hasLogo ? `/api/branding/logo?v=${logoVersion()}` : "",
   };
 }
 
-// public — used by the SPA and the (unauthenticated) share page
 branding.get("/branding", (req, res) => {
   res.json(publicBranding());
 });
@@ -76,13 +95,19 @@ function clean(s, max) {
   return String(s == null ? "" : s).replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, max);
 }
 
-branding.put("/branding", requireAppAuth, requireAdmin, (req, res) => {
+branding.put("/branding", requireAppAuth, (req, res) => {
+  const current = readBranding();
   const body = req.body || {};
-  const accent = normalizeHex(body.accent) || DEFAULTS.accent;
-  const name = clean(body.name, 40) || DEFAULTS.name;
-  const tagline = clean(body.tagline, 80);
-  const copyright = clean(body.copyright, 80);
-  metaSet(KEY, JSON.stringify({ name, accent, tagline, copyright }));
+  const isAdmin = req.user?.role === "admin";
+  const next = {
+    name: isAdmin && body.name !== undefined ? clean(body.name, 40) || DEFAULTS.name : current.name,
+    accent: isAdmin && body.accent !== undefined ? normalizeHex(body.accent) || DEFAULTS.accent : current.accent,
+    tagline: isAdmin && body.tagline !== undefined ? clean(body.tagline, 80) : current.tagline,
+    copyright: isAdmin && body.copyright !== undefined ? clean(body.copyright, 80) : current.copyright,
+    viewMode: body.viewMode === "list" ? "list" : body.viewMode === "masonry" ? "masonry" : current.viewMode,
+    preferences: body.preferences ? { ...current.preferences, ...body.preferences } : current.preferences,
+  };
+  metaSet(KEY, JSON.stringify(next));
   res.json({ ok: true, branding: publicBranding() });
 });
 

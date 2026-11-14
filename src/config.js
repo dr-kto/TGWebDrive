@@ -12,39 +12,40 @@ export const UPLOAD_TMP = path.join(DATA_DIR, "uploads");
 
 for (const d of [DATA_DIR, UPLOAD_TMP]) fs.mkdirSync(d, { recursive: true });
 
-function readSecret() {
-  const envFile = path.join(ROOT, ".env");
+// Auto-generate and persist SECRET in .env on first run so sessions stay valid across restarts.
+function readOrCreateSecret() {
   if (process.env.SECRET && process.env.SECRET.length >= 32) return process.env.SECRET;
+  const envFile = path.join(ROOT, ".env");
   if (fs.existsSync(envFile)) {
-    for (const line of fs.readFileSync(envFile, "utf8").split("\n")) {
+    const raw = fs.readFileSync(envFile, "utf8");
+    for (const line of raw.split("\n")) {
       const m = line.match(/^SECRET=(.+)$/);
       if (m && m[1].trim().length >= 32) return m[1].trim();
     }
+    const gen = randomBytes(32).toString("hex");
+    const updated = /^SECRET=.*$/m.test(raw)
+      ? raw.replace(/^SECRET=.*$/m, `SECRET=${gen}`)
+      : `${raw.replace(/\s*$/, "")}\nSECRET=${gen}\n`;
+    try {
+      fs.writeFileSync(envFile, updated, { mode: 0o600 });
+    } catch {}
+    return gen;
   }
-  const generated = randomBytes(32).toString("hex");
-  const extra = process.env.SECRET ? `\n` : `\n`;
-  const block = `SECRET=${generated}\n`;
-  if (fs.existsSync(envFile)) {
-    let txt = fs.readFileSync(envFile, "utf8");
-    if (/^SECRET=/.test(txt)) txt = txt.replace(/^SECRET=.*$/m, `SECRET=${generated}`);
-    else txt = txt.replace(/\s*$/, "") + "\n" + block;
-    fs.writeFileSync(envFile, txt);
-  } else {
-    fs.writeFileSync(envFile, block);
-  }
-  process.env.SECRET = generated;
-  return generated;
+  const gen = randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(envFile, `SECRET=${gen}\n`, { mode: 0o600 });
+  } catch {}
+  return gen;
 }
 
 export const config = {
-  port: Number(process.env.PORT) || 3001,
-  host: process.env.HOST || "127.0.0.1",
-  secret: readSecret(),
+  port: Number(process.env.PORT) || 3000,
+  host: process.env.HOST || "0.0.0.0",
+  secret: readOrCreateSecret(),
   publicUrl: (process.env.PUBLIC_URL || "").replace(/\/$/, ""),
   maxUploadBytes: Number(process.env.MAX_UPLOAD_BYTES) || 2 * 1024 * 1024 * 1024,
-  // Max bytes per Telegram message. Files larger than this are transparently
-  // split into multipart entries that reassemble on download. ~1.9 GiB keeps a
-  // safe margin under Telegram's 2 GiB per-file cap.
+  // Telegram caps a single non-premium upload at ~2 GiB. Anything larger is
+  // transparently split into <=2 GiB parts on disk and reassembled on download.
   splitPartBytes: Number(process.env.SPLIT_PART_BYTES) || Math.floor(1.9 * 1024 * 1024 * 1024),
   apiPresets: (process.env.API_PRESETS || "")
     .split(",")

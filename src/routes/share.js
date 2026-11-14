@@ -1,15 +1,23 @@
 import { Router } from "express";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import archiver from "archiver";
+import { ZipArchive } from "archiver";
 import { stmt } from "../db.js";
 import { requireAppAuth, requireAccount } from "../middleware.js";
 import { getConnectedClient } from "../tg/manager.js";
-import { buildPeer, getOne, serializeMessage, serializeMultipart, parseParts, streamToResponse, streamMultipart, streamThumb, listMessages } from "../tg/operations.js";
+import {
+  buildPeer,
+  getOne,
+  parseParts,
+  streamToResponse,
+  streamMultipart,
+  streamThumb,
+  listMessages,
+} from "../tg/operations.js";
 import { config } from "../config.js";
 import { hashPassword, verifyPassword, shortId, safeFilename } from "../util.js";
 
-export const share = Router(); // mounted under /api  (metadata + management)
-export const pubBin = Router(); // mounted at root (binary streams + zip)
+export const share = Router();
+export const pubBin = Router();
 
 const b64 = (b) => Buffer.from(b).toString("base64url");
 function signAccess(shareId, ttlSec = 3600 * 6) {
@@ -20,7 +28,7 @@ function signAccess(shareId, ttlSec = 3600 * 6) {
 }
 function verifyAccess(tok, shareId) {
   if (!tok) return false;
-  const parts = tok.split(".");
+  const parts = String(tok).split(".");
   if (parts.length !== 3) return false;
   const [sid, exp, sig] = parts;
   if (sid !== shareId) return false;
@@ -42,7 +50,7 @@ function publicShare(s) {
     size: s.size,
     needsPassword: !!s.password_hash,
     expiresAt: s.expires_at,
-    expired: s.expires_at && s.expires_at < Date.now(),
+    expired: !!(s.expires_at && s.expires_at < Date.now()),
     createdAt: s.created_at,
     downloads: s.downloads,
   };
@@ -58,12 +66,24 @@ function loadShareOrDeny(req, res) {
     res.status(410).json({ error: "Share expired" });
     return null;
   }
-  const token = req.query.token || req.headers["x-share-token"];
-  if (s.password_hash && !verifyAccess(token, s.id)) {
+  const tok = req.query.token || req.headers["x-share-token"];
+  if (s.password_hash && !verifyAccess(tok, s.id)) {
     res.status(401).json({ error: "Password required", needsPassword: true });
     return null;
   }
   return s;
+}
+
+function resolvePeerJsonForShare(req, { folder, multipartId }) {
+  if (folder && folder !== "all") {
+    const row = stmt.getFolder.get(folder, req.accountId);
+    if (row) return row.peer_json;
+  }
+  if (multipartId) {
+    const mp = stmt.getMultipart.get(String(multipartId));
+    if (mp && mp.account_id === req.accountId) return mp.peer_json;
+  }
+  return null;
 }
 
 /* ============ metadata + management (under /api) ============ */
@@ -80,8 +100,9 @@ share.post("/public/share/:id/access", (req, res) => {
   if (!s) return res.status(404).json({ error: "Share not found" });
   if (s.expires_at && s.expires_at < Date.now()) return res.status(410).json({ error: "Share expired" });
   if (!s.password_hash) return res.json({ token: signAccess(s.id) });
-  if (!verifyPassword(String(req.body?.password || ""), s.password_hash))
+  if (!verifyPassword(String(req.body?.password || ""), s.password_hash)) {
     return res.status(401).json({ error: "Wrong password" });
+  }
   res.json({ token: signAccess(s.id) });
 });
 
@@ -93,11 +114,11 @@ share.get("/public/share/:id/files", async (req, res, next) => {
     const client = await getConnectedClient(s.account_id);
     const peer = buildPeer({ peer_json: s.peer_json });
     const r = await listMessages(client, peer, { limit: 200 });
-    const token = encodeURIComponent(req.query.token || "");
+    const tok = encodeURIComponent(req.query.token || "");
     const items = r.items.map((f) => ({
       ...f,
-      rawUrl: `/s/${s.id}/file/${f.id}/raw${token ? "?token=" + token : ""}`,
-      thumbUrl: `/s/${s.id}/file/${f.id}/thumb${token ? "?token=" + token : ""}`,
+      rawUrl: `/s/${s.id}/file/${f.id}/raw${tok ? "?token=" + tok : ""}`,
+      thumbUrl: `/s/${s.id}/file/${f.id}/thumb${tok ? "?token=" + tok : ""}`,
     }));
     res.json({ items });
   } catch (e) {
@@ -114,14 +135,14 @@ share.get("/shares", requireAppAuth, requireAccount, (req, res) => {
 });
 
 share.get("/shares/for", requireAppAuth, requireAccount, (req, res) => {
-  const row = stmt.getFolder.get(req.query.folder, req.accountId);
-  if (!row) return res.status(404).json({ error: "Folder not found" });
-  let s;
-  if (req.query.multipartId) {
-    s = stmt.getShareByMultipart.get(req.accountId, row.peer_json, String(req.query.multipartId));
-  } else {
-    s = stmt.getShareByFile.get(req.accountId, row.peer_json, Number(req.query.msgId));
-  }
+  const peerJson = resolvePeerJsonForShare(req, {
+    folder: req.query.folder,
+    multipartId: req.query.multipartId,
+  });
+  if (!peerJson) return res.status(404).json({ error: "Folder not found" });
+  const s = req.query.multipartId
+    ? stmt.getShareByMultipart.get(req.accountId, peerJson, String(req.query.multipartId))
+    : stmt.getShareByFile.get(req.accountId, peerJson, Number(req.query.msgId));
   if (!s) return res.json({ none: true });
   res.json({ share: { ...publicShare(s), url: `${config.publicUrl}/s/${s.id}` } });
 });
@@ -137,39 +158,64 @@ share.get("/shares/forFolder", requireAppAuth, requireAccount, (req, res) => {
 share.post("/shares", requireAppAuth, requireAccount, (req, res, next) => {
   try {
     const { folder, msgId, multipartId, name, mime, size, password, expiresInHours, kind, title } = req.body || {};
-    const row = stmt.getFolder.get(folder, req.accountId);
-    if (!row) return res.status(404).json({ error: "Folder not found" });
     const shareKind = kind === "folder" ? "folder" : "file";
     const expiresAt = expiresInHours ? Date.now() + Number(expiresInHours) * 3600 * 1000 : null;
     const id = shortId(10);
 
     if (shareKind === "folder") {
+      const row = stmt.getFolder.get(folder, req.accountId);
+      if (!row) return res.status(404).json({ error: "Folder not found" });
       stmt.deleteFolderShares.run(req.accountId, row.peer_json);
       stmt.addShare.run({
-        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: null, multipart_id: null,
-        name: title || row.title || "Folder", mime: null, size: null,
-        password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
-        created_at: Date.now(), kind: "folder",
+        id,
+        account_id: req.accountId,
+        peer_json: row.peer_json,
+        msg_id: null,
+        multipart_id: null,
+        name: title || row.title || "Folder",
+        mime: null,
+        size: null,
+        password_hash: password ? hashPassword(password) : null,
+        expires_at: expiresAt,
+        created_at: Date.now(),
+        kind: "folder",
       });
     } else if (multipartId) {
-      // a split (multipart) file shared as one logical file
       const mp = stmt.getMultipart.get(String(multipartId));
       if (!mp || mp.account_id !== req.accountId) return res.status(404).json({ error: "File not found" });
       stmt.deleteSharesByMultipart.run(String(multipartId));
       stmt.addShare.run({
-        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: null, multipart_id: String(multipartId),
-        name: name || mp.name || null, mime: mime || mp.mime || null, size: size || mp.size || null,
-        password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
-        created_at: Date.now(), kind: "file",
+        id,
+        account_id: req.accountId,
+        peer_json: mp.peer_json,
+        msg_id: null,
+        multipart_id: String(multipartId),
+        name: name || mp.name || null,
+        mime: mime || mp.mime || null,
+        size: size || mp.size || null,
+        password_hash: password ? hashPassword(password) : null,
+        expires_at: expiresAt,
+        created_at: Date.now(),
+        kind: "file",
       });
     } else {
       if (!msgId) return res.status(400).json({ error: "msgId required" });
-      stmt.deleteSharesByFile.run(req.accountId, row.peer_json, Number(msgId));
+      const peerJson = resolvePeerJsonForShare(req, { folder });
+      if (!peerJson) return res.status(404).json({ error: "Folder not found" });
+      stmt.deleteSharesByFile.run(req.accountId, peerJson, Number(msgId));
       stmt.addShare.run({
-        id, account_id: req.accountId, peer_json: row.peer_json, msg_id: Number(msgId), multipart_id: null,
-        name: name || null, mime: mime || null, size: size || null,
-        password_hash: password ? hashPassword(password) : null, expires_at: expiresAt,
-        created_at: Date.now(), kind: "file",
+        id,
+        account_id: req.accountId,
+        peer_json: peerJson,
+        msg_id: Number(msgId),
+        multipart_id: null,
+        name: name || null,
+        mime: mime || null,
+        size: size || null,
+        password_hash: password ? hashPassword(password) : null,
+        expires_at: expiresAt,
+        created_at: Date.now(),
+        kind: "file",
       });
     }
     res.json({ ok: true, id, kind: shareKind, url: `${config.publicUrl}/s/${id}`, expiresAt });
@@ -186,7 +232,6 @@ share.delete("/shares/:id", requireAppAuth, requireAccount, (req, res) => {
 
 /* ============ binary streams + zip (mounted at root) ============ */
 
-// file share: raw + thumb
 pubBin.get("/s/:id/raw", async (req, res, next) => {
   try {
     const s = loadShareOrDeny(req, res);
@@ -210,7 +255,7 @@ pubBin.get("/s/:id/raw", async (req, res, next) => {
   }
 });
 
-pubBin.get("/s/:id/thumb", async (req, res, next) => {
+pubBin.get("/s/:id/thumb", async (req, res) => {
   try {
     const s = loadShareOrDeny(req, res);
     if (!s) return;
@@ -219,12 +264,11 @@ pubBin.get("/s/:id/thumb", async (req, res, next) => {
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, s.msg_id);
     await streamThumb(client, msg, res, `share-${s.id}-${s.msg_id}`);
-  } catch (e) {
+  } catch {
     if (!res.headersSent) res.status(404).end();
   }
 });
 
-// folder share: per-file raw + thumb
 pubBin.get("/s/:id/file/:msgId/raw", async (req, res, next) => {
   try {
     const s = loadShareOrDeny(req, res);
@@ -239,7 +283,7 @@ pubBin.get("/s/:id/file/:msgId/raw", async (req, res, next) => {
   }
 });
 
-pubBin.get("/s/:id/file/:msgId/thumb", async (req, res, next) => {
+pubBin.get("/s/:id/file/:msgId/thumb", async (req, res) => {
   try {
     const s = loadShareOrDeny(req, res);
     if (!s) return;
@@ -247,12 +291,11 @@ pubBin.get("/s/:id/file/:msgId/thumb", async (req, res, next) => {
     const peer = buildPeer({ peer_json: s.peer_json });
     const msg = await getOne(client, peer, req.params.msgId);
     await streamThumb(client, msg, res, `share-${s.id}-${req.params.msgId}`);
-  } catch (e) {
+  } catch {
     if (!res.headersSent) res.status(404).end();
   }
 });
 
-// folder share: download all as ZIP
 pubBin.get("/s/:id/zip", async (req, res, next) => {
   try {
     const s = loadShareOrDeny(req, res);
@@ -265,7 +308,7 @@ pubBin.get("/s/:id/zip", async (req, res, next) => {
     res.setHeader("Content-Type", "application/zip");
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(zipName)}`);
     res.setHeader("Cache-Control", "no-store");
-    const archive = archiver("zip", { zlib: { level: 5 } });
+    const archive = new ZipArchive({ zlib: { level: 5 } });
     archive.on("error", (e) => {
       if (!res.headersSent) next(e);
       else res.end();

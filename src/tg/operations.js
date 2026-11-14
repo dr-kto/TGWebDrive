@@ -3,7 +3,6 @@ import bigInt from "big-integer";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import mime from "mime-types";
 import { fmtBytes, classify, extOf } from "../util.js";
 import { HttpError } from "./manager.js";
 import { generateThumb, thumbCachePath } from "../thumb.js";
@@ -20,6 +19,9 @@ export function buildPeer(folder) {
       accessHash: BigInt(p.accessHash),
     });
   }
+  if (p.kind === "chat") {
+    return new Api.InputPeerChat({ chatId: BigInt(p.chatId || p.channelId) });
+  }
   if (p.kind === "user") {
     return new Api.InputPeerUser({ userId: BigInt(p.userId), accessHash: BigInt(p.accessHash) });
   }
@@ -30,13 +32,10 @@ export const SAVED_PEER = { kind: "self" };
 
 /* ---------- multipart helpers ---------- */
 
-// True for the synthetic ids we hand to the frontend (e.g. "mp_abc123").
 export function isMultipartId(id) {
   return typeof id === "string" && id.startsWith("mp_");
 }
 
-// Turn a multipart_files row into the same shape produced by serializeMessage
-// so the UI can treat it like any other file.
 export function serializeMultipart(mp) {
   let parts = [];
   try {
@@ -81,10 +80,107 @@ function docName(doc) {
   return "file" + (ext ? "." + ext : "");
 }
 
-export function serializeMessage(msg) {
-  if (!msg || !msg.media || msg.media instanceof Api.MessageMediaEmpty || msg.media instanceof Api.MessageMediaWebPage) {
-    return null;
+function domainOf(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
   }
+}
+
+export function serializeMessage(msg) {
+  if (!msg || msg.className === "MessageService") return null;
+
+  // WebPage link preview message
+  if (msg.media instanceof Api.MessageMediaWebPage && msg.media.webpage instanceof Api.WebPage) {
+    const wp = msg.media.webpage;
+    const urlMatch = (msg.message || "").match(/https?:\/\/\S+/i);
+    const url = wp.url || wp.displayUrl || (urlMatch ? urlMatch[0] : "");
+    if (!url) return null;
+    const domain = domainOf(url);
+    const hasPhoto = !!(wp.photo && !(wp.photo instanceof Api.PhotoEmpty));
+    const title = wp.title || wp.siteName || domain || url;
+    const size = Buffer.byteLength(url + (msg.message || ""), "utf8");
+    return {
+      id: Number(msg.id),
+      date: Number(msg.date),
+      caption: msg.message || "",
+      name: title,
+      mime: "text/uri-list",
+      ext: "url",
+      size,
+      sizeText: fmtBytes(size),
+      kind: "link",
+      isPhoto: false,
+      hasThumb: hasPhoto,
+      width: null,
+      height: null,
+      duration: null,
+      url,
+      domain,
+      hasPreview: !!(wp.title || wp.description || hasPhoto),
+      previewDescription: wp.description || (msg.message && msg.message.trim() !== url ? msg.message : ""),
+    };
+  }
+
+  // Plain text / link message without attachment
+  if (!msg.media || msg.media instanceof Api.MessageMediaEmpty || msg.media instanceof Api.MessageMediaWebPage) {
+    const raw = typeof msg.message === "string" ? msg.message.trim() : "";
+    if (!raw) return null;
+    const lines = raw.split("\n").map((l) => l.trim()).filter(Boolean);
+    const lastLine = lines[lines.length - 1] || "";
+    const isPureUrl = /^https?:\/\/\S+$/i.test(raw);
+    const isTaggedLink = lines.length <= 3 && /^https?:\/\/\S+$/i.test(lastLine);
+
+    if (isPureUrl || isTaggedLink) {
+      const url = isPureUrl ? raw : lastLine;
+      const domain = domainOf(url);
+      const name = isPureUrl ? url : lines[0] !== url ? lines[0] : domain || url;
+      const desc = lines.length === 3 ? lines[1] : "";
+      const size = Buffer.byteLength(raw, "utf8");
+      return {
+        id: Number(msg.id),
+        date: Number(msg.date),
+        caption: raw,
+        name,
+        mime: "text/uri-list",
+        ext: "url",
+        size,
+        sizeText: fmtBytes(size),
+        kind: "link",
+        isPhoto: false,
+        hasThumb: false,
+        width: null,
+        height: null,
+        duration: null,
+        url,
+        domain,
+        hasPreview: false,
+        previewDescription: desc,
+      };
+    }
+
+    const firstLine = (lines[0] || "Note").slice(0, 64);
+    const size = Buffer.byteLength(raw, "utf8");
+    return {
+      id: Number(msg.id),
+      date: Number(msg.date),
+      caption: "",
+      name: firstLine,
+      mime: "text/plain",
+      ext: "note",
+      size,
+      sizeText: fmtBytes(size),
+      kind: "note",
+      isPhoto: false,
+      hasThumb: false,
+      width: null,
+      height: null,
+      duration: null,
+      noteContent: raw,
+    };
+  }
+
   let name = null,
     mime = null,
     size = null,
@@ -92,7 +188,8 @@ export function serializeMessage(msg) {
     hasThumb = false,
     width = null,
     height = null,
-    duration = null;
+    duration = null,
+    artist = null;
 
   if (msg.media instanceof Api.MessageMediaPhoto && msg.media.photo && !(msg.media.photo instanceof Api.PhotoEmpty)) {
     isPhoto = true;
@@ -130,6 +227,14 @@ export function serializeMessage(msg) {
         duration = a.duration ?? duration;
         if (!hasThumb && (a.thumb || a.flags?.thumb)) hasThumb = true;
       }
+      if (a instanceof Api.DocumentAttributeAudio) {
+        duration = a.duration ?? duration;
+        if (a.performer) artist = a.performer;
+        if (a.title && /^file(\.|$)/i.test(name)) {
+          const ext = extOf(name) || "mp3";
+          name = `${a.title}.${ext}`;
+        }
+      }
       if (a instanceof Api.DocumentAttributeAnimated) hasThumb = hasThumb || !!doc.thumbs?.length;
     }
     hasThumb = hasThumb || !!(doc.thumbs && doc.thumbs.length);
@@ -152,25 +257,30 @@ export function serializeMessage(msg) {
     width,
     height,
     duration,
+    ...(artist ? { artist } : {}),
   };
 }
 
 /* ---------- listing ---------- */
 
 export async function listMessages(client, peer, { limit = 50, offsetId = 0, search } = {}) {
+  const offId = Number(offsetId) || 0;
   const params = {
     limit,
-    offsetId: Number(offsetId) || 0,
+    offsetId: offId,
   };
   if (search) params.search = search;
   const messages = await client.getMessages(peer, params);
   const items = [];
+  let minId = null;
   for (const m of messages) {
+    const mid = Number(m.id);
+    if (minId === null || mid < minId) minId = mid;
     const s = serializeMessage(m);
     if (s) items.push(s);
   }
-  const last = messages.length ? Number(messages[messages.length - 1].id) : null;
-  return { items, nextOffset: last && messages.length >= limit ? last : null, count: items.length };
+  const nextOffset = minId !== null && minId !== offId && messages.length >= limit ? minId : null;
+  return { items, nextOffset, count: items.length };
 }
 
 export async function getOne(client, peer, id) {
@@ -180,7 +290,7 @@ export async function getOne(client, peer, id) {
   return msg;
 }
 
-/* ---------- upload ---------- */
+/* ---------- upload & text ---------- */
 
 export function uploadFile(client, peer, { filePath, fileName, fileSize, caption, forceDocument, onProgress, thumb }) {
   return client.sendFile(peer, {
@@ -195,7 +305,11 @@ export function uploadFile(client, peer, { filePath, fileName, fileSize, caption
   });
 }
 
-/* ---------- rename (caption) / delete ---------- */
+export function sendTextMessage(client, peer, message) {
+  return client.sendMessage(peer, { message: String(message || "") });
+}
+
+/* ---------- rename (caption / note) / delete ---------- */
 
 export function renameFile(client, peer, id, caption) {
   return client.editMessage(peer, { message: Number(id), text: caption || "" });
@@ -207,7 +321,6 @@ export async function deleteFiles(client, peer, ids) {
     await client.deleteMessages(peer, numIds, { revoke: true });
     return true;
   } catch (e) {
-    // channels may need a different route
     if (peer instanceof Api.InputPeerChannel) {
       await client.invoke(
         new Api.channels.DeleteMessages({
@@ -225,6 +338,18 @@ export async function deleteFiles(client, peer, ids) {
 
 export async function streamToResponse(client, msg, req, res, { attachment = false, name, mime: forcedMime } = {}) {
   const meta = serializeMessage(msg) || {};
+
+  // Plain text / note / link message fallback
+  if (!msg?.media || msg.media instanceof Api.MessageMediaEmpty || (meta.kind === "note" || meta.kind === "link")) {
+    if (meta.kind === "note" || meta.kind === "link" || typeof msg?.message === "string") {
+      const text = msg?.message || meta.noteContent || meta.url || "";
+      const fileName = (meta.name || name || "note") + (meta.kind === "note" && !/\.txt$/i.test(meta.name || "") ? ".txt" : "");
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.setHeader("Content-Disposition", `${attachment ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
+      return res.send(Buffer.from(text, "utf8"));
+    }
+  }
+
   const contentType = forcedMime || meta.mime || "application/octet-stream";
   const fileName = meta.name || name || "file";
   const total = Number(meta.size) || 0;
@@ -233,14 +358,12 @@ export async function streamToResponse(client, msg, req, res, { attachment = fal
   res.setHeader("Accept-Ranges", "bytes");
   res.setHeader("Cache-Control", "private, max-age=3600");
 
-  // Forced download, or unknown size → stream the whole file without range handling.
   if (attachment || !total) {
     res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Disposition", `${attachment ? "attachment" : "inline"}; filename*=UTF-8''${encodeURIComponent(fileName)}`);
     return streamFull(client, msg, req, res, total);
   }
 
-  // Inline playback with a known size → honour Range requests so video/audio can seek.
   let start = 0;
   let end = total - 1;
   let ranged = false;
@@ -248,7 +371,7 @@ export async function streamToResponse(client, msg, req, res, { attachment = fal
     const m = /bytes=(\d*)-(\d*)/.exec(rangeHeader);
     if (m) {
       if (m[1]) start = parseInt(m[1], 10);
-      else if (m[2]) start = Math.max(0, total - parseInt(m[2], 10)); // suffix range (last N bytes)
+      else if (m[2]) start = Math.max(0, total - parseInt(m[2], 10));
       if (m[1] && m[2]) end = parseInt(m[2], 10);
       if (start > total - 1) start = total - 1;
       end = Math.min(end, total - 1);
@@ -265,7 +388,6 @@ export async function streamToResponse(client, msg, req, res, { attachment = fal
   return streamRange(client, msg, req, res, start, length, total);
 }
 
-// Full progressive stream via the high-level downloadMedia writer.
 async function streamFull(client, msg, req, res, total) {
   if (total) res.setHeader("Content-Length", String(total));
   let aborted = false;
@@ -290,8 +412,6 @@ async function streamFull(client, msg, req, res, total) {
   }
 }
 
-// Stream only the requested byte range directly from Telegram (no temp file),
-// enabling fast seeking for large videos.
 async function streamRange(client, msg, req, res, start, length, total) {
   let aborted = false;
   const onAbort = () => (aborted = true);
@@ -323,14 +443,10 @@ async function streamRange(client, msg, req, res, start, length, total) {
   }
 }
 
-// Stream a multipart (split) file as one continuous download: each Telegram
-// part is fetched in order and piped straight to the client. Range requests
-// are not supported across parts, so callers force a full stream.
 export async function streamMultipart(client, peer, parts, total, req, res, { attachment = false, name, mime } = {}) {
   const contentType = mime || "application/octet-stream";
   const fileName = name || "file";
 
-  // Fetch every part message up front so we can pipe them back to back.
   const ids = parts.map((p) => Number(p.msgId)).filter((x) => !isNaN(x));
   let messages = [];
   if (ids.length) messages = await client.getMessages(peer, { ids });
@@ -372,10 +488,14 @@ export async function streamMultipart(client, peer, parts, total, req, res, { at
 /* ---------- thumbnail ---------- */
 
 export async function streamThumb(client, msg, res, cacheKey) {
-  // 1. native Telegram thumbnail
+  const target =
+    msg?.media instanceof Api.MessageMediaWebPage && msg.media.webpage?.photo
+      ? msg.media.webpage.photo
+      : msg;
+
   const tmp = path.join(os.tmpdir(), `tgd-thumb-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
   try {
-    await client.downloadMedia(msg, { outputFile: tmp, thumb: 0 });
+    await client.downloadMedia(target, { outputFile: tmp, thumb: 0 });
     if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
       const data = fs.readFileSync(tmp);
       fs.unlink(tmp, () => {});
@@ -386,9 +506,8 @@ export async function streamThumb(client, msg, res, cacheKey) {
   } catch {}
   if (fs.existsSync(tmp)) fs.unlink(tmp, () => {});
 
-  // 2. no native thumb — generate one from the full image (images only)
   const meta = serializeMessage(msg);
-  const isImg = meta.kind === "image" || (meta.mime && meta.mime.startsWith("image/"));
+  const isImg = meta && (meta.kind === "image" || (meta.mime && meta.mime.startsWith("image/")));
   if (isImg && cacheKey) {
     const cachePath = thumbCachePath(cacheKey);
     try {
@@ -413,7 +532,7 @@ export async function createChannelFolder(client, title) {
     new Api.channels.CreateChannel({
       broadcast: true,
       title: title.slice(0, 255),
-      about: "Telegram Drive folder",
+      about: "Telegram Disk folder",
     })
   );
   const chat = extractCreatedChat(res);
@@ -437,14 +556,28 @@ function extractCreatedChat(updates) {
 }
 
 export async function listDialogs(client) {
-  const res = await client.invoke(new Api.messages.GetDialogs({ offsetPeer: new Api.InputPeerEmpty(), limit: 100, hash: 0n }));
+  const res = await client.invoke(
+    new Api.messages.GetDialogs({ offsetPeer: new Api.InputPeerEmpty(), limit: 100, hash: 0n })
+  );
   const out = [];
   const chats = res.chats || [];
   for (const c of chats) {
     if (c instanceof Api.Channel) {
-      out.push({ id: String(c.id), accessHash: String(c.accessHash), title: c.title || "Channel", type: "channel", username: c.username || null });
+      out.push({
+        id: String(c.id),
+        accessHash: String(c.accessHash),
+        title: c.title || "Channel",
+        type: "channel",
+        username: c.username || null,
+      });
     } else if (c instanceof Api.Chat) {
-      out.push({ id: String(c.id), accessHash: "0", title: c.title || "Chat", type: "chat", username: null });
+      out.push({
+        id: String(c.id),
+        accessHash: "0",
+        title: c.title || "Chat",
+        type: "chat",
+        username: null,
+      });
     }
   }
   return out;

@@ -15,7 +15,7 @@ import {
   deleteFiles,
   streamToResponse,
 } from "../tg/operations.js";
-import { tempPath, safeFilename, uid, token } from "../util.js";
+import { safeFilename, uid, token } from "../util.js";
 
 export const api = Router();
 export const keys = Router();
@@ -43,7 +43,14 @@ async function loadFolder(req) {
 
 api.get("/v1/folders", requireApiKey, async (req, res, next) => {
   try {
-    res.json({ folders: stmt.foldersFor.all(req.accountId).map((f) => ({ id: f.id, title: f.title, kind: f.kind })) });
+    res.json({
+      folders: stmt.foldersFor.all(req.accountId).map((f) => ({
+        id: f.id,
+        title: f.title,
+        kind: f.kind,
+        parentId: f.parent_id || null,
+      })),
+    });
   } catch (e) {
     next(e);
   }
@@ -51,10 +58,27 @@ api.get("/v1/folders", requireApiKey, async (req, res, next) => {
 
 api.get("/v1/files", requireApiKey, async (req, res, next) => {
   try {
-    const { peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
+    const limit = Math.min(Number(req.query.limit) || 60, 200);
+    if (req.query.folder === "all") {
+      const all = stmt.foldersFor.all(req.accountId);
+      const aggregated = [];
+      for (const f of all.slice(0, 12)) {
+        try {
+          const r = await listMessages(client, buildPeer(f), {
+            limit: Math.ceil(limit / Math.max(1, all.length)) + 10,
+            search: req.query.search || undefined,
+          });
+          aggregated.push(...r.items.map((it) => ({ ...it, folderId: f.id, folderTitle: f.title })));
+        } catch {}
+      }
+      aggregated.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+      const items = aggregated.slice(0, limit);
+      return res.json({ items, nextOffset: null, count: items.length });
+    }
+    const { peer } = await loadFolder(req);
     const r = await listMessages(client, peer, {
-      limit: Math.min(Number(req.query.limit) || 60, 200),
+      limit,
       offsetId: req.query.offsetId || 0,
       search: req.query.search || undefined,
     });

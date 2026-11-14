@@ -48,11 +48,13 @@ export function fmtRate(bytesPerSec) {
 }
 
 export function safeFilename(name) {
-  return (name || "file")
-    .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 200) || "file";
+  return (
+    (name || "file")
+      .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "_")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 200) || "file"
+  );
 }
 
 export function tempPath(prefix = "up") {
@@ -62,9 +64,11 @@ export function tempPath(prefix = "up") {
 export function isImage(mime) {
   return typeof mime === "string" && mime.startsWith("image/");
 }
+
 export function isVideo(mime) {
   return typeof mime === "string" && (mime.startsWith("video/") || mime === "application/x-mpegurl");
 }
+
 export function isAudio(mime) {
   return typeof mime === "string" && (mime.startsWith("audio/") || mime === "application/ogg");
 }
@@ -75,7 +79,7 @@ export function classify(mime, name) {
   if (isVideo(mime)) return "video";
   if (isAudio(mime)) return "audio";
   if (mime === "application/pdf" || n.endsWith(".pdf")) return "pdf";
-  if (/\.(zip|rar|7z|tar|gz|bz2|xz)$/.test(n)) return "archive";
+  if (/\.(zip|rar|7z|7zip|tar|gz|bz2|xz)$/.test(n)) return "archive";
   if (/\.(txt|md|json|js|ts|css|html|xml|yaml|yml|csv|log|ini|conf|sh|py|rs|go|java|c|cpp|h)$/.test(n)) return "text";
   return "file";
 }

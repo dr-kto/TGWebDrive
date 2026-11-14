@@ -18,7 +18,6 @@ app.set("trust proxy", 1);
 app.disable("x-powered-by");
 app.use(
   compression({
-    // Never compress Server-Sent Events — gzip buffering freezes upload progress.
     filter: (req, res) => {
       const ct = res.getHeader("Content-Type");
       if (typeof ct === "string" && ct.includes("text/event-stream")) return false;
@@ -28,24 +27,25 @@ app.use(
 );
 app.use(cookieParser(config.secret));
 
-// Parse JSON bodies for API routes, but never for the upload endpoint — its body
-// is a raw file stream that express.json would otherwise try to parse (breaking
-// uploads of files whose browser-detected type is application/json).
 const jsonParser = express.json({ limit: "1mb" });
 app.use((req, res, next) => {
   if (req.method === "POST" && req.path === "/api/files/upload") return next();
   jsonParser(req, res, next);
 });
 
-// security headers
 app.use((req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "SAMEORIGIN");
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
 
 app.get("/api/health", (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+app.get("/presets.js", (req, res) => {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.send(`window.__PRESETS__=${JSON.stringify(config.apiPresets || [])};`);
+});
 
 app.use("/api", auth, folders, files, share, stats, api, keys, branding);
 
@@ -68,9 +68,6 @@ app.get(/^\/(?!api\/).*/, (req, res, next) => {
 
 // error handler
 app.use((err, req, res, _next) => {
-  // Upload failures used to vanish: HttpError(400) and JSON-parse errors return
-  // without logging, so a rejected upload left no trace. Log every upload-path
-  // error so they're diagnosable.
   if (req.path.includes("/files/upload")) {
     console.error("[upload-error]", JSON.stringify({ status: err?.status || err?.code, type: err?.type, isHttp: err instanceof HttpError, msg: err?.message }));
   }
@@ -85,7 +82,7 @@ app.use((err, req, res, _next) => {
 });
 
 app.listen(config.port, config.host, () => {
-  console.log(`tgdrive listening on http://${config.host}:${config.port} (proxied via Apache)`);
+  console.log(`tgdrive listening on http://${config.host}:${config.port}`);
 });
 
 process.on("uncaughtException", (e) => console.error("[uncaught]", e?.stack || e));

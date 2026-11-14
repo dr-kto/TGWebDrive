@@ -9,6 +9,7 @@ export function subscribe(jobId, fn) {
     if (s) s.delete(fn);
   };
 }
+
 export function publish(jobId, data) {
   const s = subs.get(jobId);
   if (!s) return;
@@ -18,10 +19,12 @@ export function publish(jobId, data) {
     } catch {}
   }
 }
+
 export function finish(jobId, payload = {}) {
   publish(jobId, { ...payload, done: true });
   subs.delete(jobId);
 }
+
 export function fail(jobId, error) {
   publish(jobId, { error: String(error?.message || error) });
   subs.delete(jobId);

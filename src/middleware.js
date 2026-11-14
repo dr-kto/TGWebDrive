@@ -1,12 +1,9 @@
 import { metaGet, metaSet, stmt } from "./db.js";
 import { verifyPassword, token } from "./util.js";
 
-// Sessions are persisted in SQLite so server restarts no longer log people out.
-// A "remember me" login opts into the longer-lived cookie/session.
 const TTL_REMEMBER = 1000 * 60 * 60 * 24 * 90; // 90 days
 const TTL_SESSION = 1000 * 60 * 60 * 24 * 1; // 1 day
 
-// Purge expired sessions occasionally.
 function gc() {
   try {
     stmt.deleteExpiredSessions.run(Date.now());
@@ -14,9 +11,29 @@ function gc() {
 }
 setInterval(gc, 60 * 60 * 1000).unref();
 
-// cookies are marked secure when served over HTTPS via the proxy
 function cookieSecure(req) {
   return !!(req.secure || req.protocol === "https" || req.headers["x-forwarded-proto"] === "https");
+}
+
+function cookieOpts(req, maxAge) {
+  const sec = cookieSecure(req);
+  return {
+    httpOnly: true,
+    sameSite: sec ? "none" : "lax",
+    secure: sec,
+    ...(sec ? { partitioned: true } : {}),
+    ...(maxAge !== undefined ? { maxAge } : {}),
+    path: "/",
+  };
+}
+
+export function readSessionId(req) {
+  return (
+    req.cookies?.sid ||
+    (typeof req.headers["x-session"] === "string" ? req.headers["x-session"] : null) ||
+    (typeof req.query?._st === "string" ? req.query._st : null) ||
+    null
+  );
 }
 
 export function createSession(req, res, user, { remember = false } = {}) {
@@ -37,17 +54,11 @@ export function createSession(req, res, user, { remember = false } = {}) {
 }
 
 export function setCookie(req, res, sid, ttlMs = TTL_SESSION) {
-  res.cookie("sid", sid, {
-    httpOnly: true,
-    sameSite: "lax",
-    secure: cookieSecure(req),
-    maxAge: ttlMs,
-    path: "/",
-  });
+  res.cookie("sid", sid, cookieOpts(req, ttlMs));
 }
 
 export function getSession(req) {
-  const sid = req.cookies?.sid;
+  const sid = readSessionId(req);
   if (!sid) return null;
   const row = stmt.getSession.get(sid);
   if (!row) return null;
@@ -66,7 +77,7 @@ export function getSession(req) {
 }
 
 export function updateSession(req, patch) {
-  const sid = req.cookies?.sid;
+  const sid = readSessionId(req);
   if (!sid) return;
   if (patch && Object.prototype.hasOwnProperty.call(patch, "currentAccountId")) {
     stmt.updateSessionRow.run({ sid, current_account_id: patch.currentAccountId ?? null });
@@ -74,9 +85,9 @@ export function updateSession(req, patch) {
 }
 
 export function destroySession(req, res) {
-  const sid = req.cookies?.sid;
+  const sid = readSessionId(req);
   if (sid) stmt.deleteSession.run(sid);
-  res.clearCookie("sid", { path: "/" });
+  res.clearCookie("sid", cookieOpts(req));
 }
 
 export function destroyUserSessions(userId) {

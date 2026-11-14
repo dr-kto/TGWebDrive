@@ -11,7 +11,17 @@ import {
   destroyUserSessions,
 } from "../middleware.js";
 import { hashPassword, verifyPassword, uid } from "../util.js";
-import { beginLogin, resendCode, finishLogin, cancelLogin, dropClient, beginQrLogin, checkQrLogin, submitQr2FA, cancelQrLogin } from "../tg/manager.js";
+import {
+  beginLogin,
+  resendCode,
+  finishLogin,
+  cancelLogin,
+  dropClient,
+  beginQrLogin,
+  checkQrLogin,
+  submitQr2FA,
+  cancelQrLogin,
+} from "../tg/manager.js";
 
 export const auth = Router();
 
@@ -49,16 +59,18 @@ auth.post("/auth/setup", (req, res) => {
   if (isSetup()) return res.status(409).json({ error: "Already set up" });
   const username = String(req.body?.username || "admin").trim().toLowerCase();
   const password = String(req.body?.password || "");
-  if (!/^[a-z0-9_.-]{3,32}$/i.test(username)) return res.status(400).json({ error: "Username must be 3-32 chars (letters, numbers, _ . -)" });
+  if (!/^[a-z0-9_.-]{3,32}$/i.test(username)) {
+    return res.status(400).json({ error: "Username must be 3-32 chars (letters, numbers, _ . -)" });
+  }
   if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
   const id = uid();
   try {
     stmt.addUser.run({ id, username, password_hash: hashPassword(password), role: "admin", created_at: Date.now() });
-  } catch (e) {
+  } catch {
     return res.status(400).json({ error: "Username already exists" });
   }
-  createSession(req, res, { id, username, role: "admin" }, { remember: true });
-  res.json({ ok: true });
+  const sid = createSession(req, res, { id, username, role: "admin" }, { remember: true });
+  res.json({ ok: true, sessionToken: sid });
 });
 
 auth.post("/auth/login", (req, res) => {
@@ -66,9 +78,11 @@ auth.post("/auth/login", (req, res) => {
   const password = String(req.body?.password || "");
   const remember = req.body?.remember !== false && req.body?.remember !== "false";
   const user = stmt.getUserByUsername.get(username);
-  if (!user || !verifyPassword(password, user.password_hash)) return res.status(401).json({ error: "Wrong username or password" });
-  createSession(req, res, { id: user.id, username: user.username, role: user.role }, { remember });
-  res.json({ ok: true });
+  if (!user || !verifyPassword(password, user.password_hash)) {
+    return res.status(401).json({ error: "Wrong username or password" });
+  }
+  const sid = createSession(req, res, { id: user.id, username: user.username, role: user.role }, { remember });
+  res.json({ ok: true, sessionToken: sid });
 });
 
 auth.post("/auth/logout", (req, res) => {
@@ -80,7 +94,9 @@ auth.post("/auth/password", requireAppAuth, (req, res) => {
   const cur = String(req.body?.current || "");
   const next = String(req.body?.next || "");
   const user = stmt.getUserById.get(req.user.id);
-  if (!user || !verifyPassword(cur, user.password_hash)) return res.status(401).json({ error: "Current password is wrong" });
+  if (!user || !verifyPassword(cur, user.password_hash)) {
+    return res.status(401).json({ error: "Current password is wrong" });
+  }
   if (next.length < 4) return res.status(400).json({ error: "New password must be at least 4 characters" });
   stmt.updateUser.run({ id: user.id, password_hash: hashPassword(next), role: user.role });
   res.json({ ok: true });
@@ -96,12 +112,14 @@ auth.post("/users", requireAppAuth, requireAdmin, (req, res) => {
   const username = String(req.body?.username || "").trim().toLowerCase();
   const password = String(req.body?.password || "");
   const role = req.body?.role === "admin" ? "admin" : "user";
-  if (!/^[a-z0-9_.-]{3,32}$/i.test(username)) return res.status(400).json({ error: "Username must be 3-32 chars (letters, numbers, _ . -)" });
+  if (!/^[a-z0-9_.-]{3,32}$/i.test(username)) {
+    return res.status(400).json({ error: "Username must be 3-32 chars (letters, numbers, _ . -)" });
+  }
   if (password.length < 4) return res.status(400).json({ error: "Password must be at least 4 characters" });
   const id = uid();
   try {
     stmt.addUser.run({ id, username, password_hash: hashPassword(password), role, created_at: Date.now() });
-  } catch (e) {
+  } catch {
     return res.status(400).json({ error: "Username already exists" });
   }
   res.json({ ok: true, user: publicUser(stmt.getUserById.get(id)) });
@@ -111,7 +129,6 @@ auth.patch("/users/:id", requireAppAuth, requireAdmin, (req, res) => {
   const user = stmt.getUserById.get(req.params.id);
   if (!user) return res.status(404).json({ error: "User not found" });
   const role = req.body?.role === "admin" ? "admin" : req.body?.role === "user" ? "user" : user.role;
-  // never remove the last admin
   if (user.role === "admin" && role === "user") {
     const admins = stmt.listUsers.all().filter((u) => u.role === "admin").length;
     if (admins <= 1) return res.status(400).json({ error: "Cannot demote the last admin" });
@@ -188,9 +205,7 @@ auth.post("/auth/tg/qr/start", requireAppAuth, requireAdmin, async (req, res, ne
     const { apiId, apiHash } = req.body || {};
     if (!apiId || !apiHash) return res.status(400).json({ error: "apiId and apiHash are required" });
     const r = await beginQrLogin(Number(apiId), String(apiHash));
-    if (r.done && r.accountId) {
-      updateSession(req, { currentAccountId: r.accountId });
-    }
+    if (r.done && r.accountId) updateSession(req, { currentAccountId: r.accountId });
     res.json(r);
   } catch (e) {
     next(e);
@@ -200,9 +215,7 @@ auth.post("/auth/tg/qr/start", requireAppAuth, requireAdmin, async (req, res, ne
 auth.post("/auth/tg/qr/check", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
     const r = checkQrLogin(req.body?.tempToken);
-    if (r.done && r.accountId) {
-      updateSession(req, { currentAccountId: r.accountId });
-    }
+    if (r.done && r.accountId) updateSession(req, { currentAccountId: r.accountId });
     res.json(r);
   } catch (e) {
     next(e);
@@ -212,9 +225,7 @@ auth.post("/auth/tg/qr/check", requireAppAuth, requireAdmin, async (req, res, ne
 auth.post("/auth/tg/qr/password", requireAppAuth, requireAdmin, async (req, res, next) => {
   try {
     const r = await submitQr2FA(req.body?.tempToken, req.body?.password);
-    if (r.done && r.accountId) {
-      updateSession(req, { currentAccountId: r.accountId });
-    }
+    if (r.done && r.accountId) updateSession(req, { currentAccountId: r.accountId });
     res.json(r);
   } catch (e) {
     next(e);

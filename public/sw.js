@@ -1,10 +1,7 @@
 // Background upload service worker.
-// The page hands off each upload (File + request details) via postMessage; this
-// worker performs the actual POST. Because the fetch lives in the worker (not
-// the page), it keeps running when the user navigates within the app or away —
-// so large/slow uploads are no longer killed by navigation.
-const jobs = new Map(); // uploadId -> job
-const aborts = new Map(); // uploadId -> AbortController
+// Keeps uploads running when navigating inside the app.
+const jobs = new Map();
+const aborts = new Map();
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => e.waitUntil(self.clients.claim()));
@@ -47,7 +44,11 @@ async function handleUpload({ id, url, file, headers, name, folderId, size, jobI
     });
   } catch (err) {
     const aborted = err?.name === "AbortError";
-    jobs.set(id, { ...jobs.get(id), status: aborted ? "aborted" : "error", error: aborted ? "Cancelled" : err?.message || "Network error" });
+    jobs.set(id, {
+      ...jobs.get(id),
+      status: aborted ? "aborted" : "error",
+      error: aborted ? "Cancelled" : err?.message || "Network error",
+    });
   }
   aborts.delete(id);
   broadcast(id);

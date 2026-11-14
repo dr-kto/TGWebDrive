@@ -59,6 +59,8 @@ export function serializeMultipart(mp) {
     width: null,
     height: null,
     duration: null,
+    isMine: true,
+    sender: null,
   };
 }
 
@@ -88,8 +90,97 @@ function domainOf(url) {
   }
 }
 
-export function serializeMessage(msg) {
+export function extractYouTubeId(url) {
+  if (!url) return null;
+  const str = String(url).trim();
+  const shortMatch = str.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/i);
+  if (shortMatch) return shortMatch[1];
+  const pathMatch = str.match(/youtube\.com\/(?:shorts|embed|v|live)\/([a-zA-Z0-9_-]{11})/i);
+  if (pathMatch) return pathMatch[1];
+  const queryMatch = str.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+  if (queryMatch) return queryMatch[1];
+  const anyMatch = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i);
+  return anyMatch ? anyMatch[1] : null;
+}
+
+export function extractSenderInfo(msg, myUserId) {
+  if (!msg) return { isMine: true, canEdit: true, forwarded: false, sender: null };
+
+  const isFwd = Boolean(msg.fwdFrom);
+  const senderId = msg.senderId ? String(msg.senderId) : (msg.sender?.id ? String(msg.sender.id) : null);
+  const myIdStr = myUserId ? String(myUserId) : null;
+
+  let isMine = true;
+  if (isFwd) {
+    isMine = false;
+  } else if (myIdStr && senderId) {
+    isMine = senderId === myIdStr;
+  } else if (msg.out !== undefined) {
+    isMine = Boolean(msg.out);
+  } else if (msg.postAuthor) {
+    isMine = false;
+  }
+
+  // Telegram MTProto strictly forbids editing forwarded messages (raises MESSAGE_ID_INVALID)
+  const canEdit = !isFwd && isMine;
+
+  if (isMine && !isFwd) {
+    return { isMine: true, canEdit: true, forwarded: false, sender: null };
+  }
+
+  let senderName = "";
+  let senderUsername = "";
+  let extractedId = null;
+  let hasAvatar = false;
+
+  // For forwarded messages, source entity is msg.forward?.sender or msg.forward?.chat
+  // (In Saved Messages, msg.sender is the current user, so checking msg.sender first would incorrectly treat the user as the sender)
+  const s = isFwd
+    ? (msg.forward?.sender || msg.forward?.chat)
+    : (msg.sender || msg.forward?.sender || msg.forward?.chat);
+
+  if (s) {
+    if (s.id !== undefined && s.id !== null) extractedId = String(s.id);
+    if (s.username) senderUsername = s.username;
+    if (s.firstName || s.lastName) {
+      senderName = [s.firstName, s.lastName].filter(Boolean).join(" ");
+    } else if (s.title) {
+      senderName = s.title;
+    } else if (s.username) {
+      senderName = s.username;
+    }
+    hasAvatar = !!(s.photo && !(s.photo instanceof Api.UserProfilePhotoEmpty) && !(s.photo instanceof Api.ChatPhotoEmpty));
+  } else if (msg.postAuthor) {
+    senderName = msg.postAuthor;
+  }
+
+  if (isFwd && msg.fwdFrom) {
+    if (!senderName) {
+      if (msg.fwdFrom.fromName) senderName = msg.fwdFrom.fromName;
+      else if (msg.fwdFrom.postAuthor) senderName = msg.fwdFrom.postAuthor;
+    }
+    if (!extractedId) {
+      const fid = msg.fwdFrom.fromId?.userId || msg.fwdFrom.fromId?.channelId || msg.fwdFrom.fromId?.chatId
+               || msg.fwdFrom.savedFromPeer?.userId || msg.fwdFrom.savedFromPeer?.channelId || msg.fwdFrom.savedFromPeer?.chatId;
+      if (fid) extractedId = String(fid);
+    }
+  }
+
+  const sender = (senderName || senderUsername || extractedId)
+    ? {
+        id: extractedId || (isFwd ? null : senderId),
+        name: senderName || (senderUsername ? "@" + senderUsername : "Telegram User"),
+        username: senderUsername ? (senderUsername.startsWith("@") ? senderUsername : "@" + senderUsername) : "",
+        hasAvatar,
+      }
+    : null;
+
+  return { isMine: isMine && !isFwd, canEdit, forwarded: isFwd, sender };
+}
+
+export function serializeMessage(msg, myUserId) {
   if (!msg || msg.className === "MessageService") return null;
+  const { isMine, canEdit, forwarded, sender } = extractSenderInfo(msg, myUserId);
 
   // WebPage link preview message
   if (msg.media instanceof Api.MessageMediaWebPage && msg.media.webpage instanceof Api.WebPage) {
@@ -99,6 +190,8 @@ export function serializeMessage(msg) {
     if (!url) return null;
     const domain = domainOf(url);
     const hasPhoto = !!(wp.photo && !(wp.photo instanceof Api.PhotoEmpty));
+    const ytId = extractYouTubeId(url);
+    const ytThumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
     const title = wp.title || wp.siteName || domain || url;
     const size = Buffer.byteLength(url + (msg.message || ""), "utf8");
     return {
@@ -112,14 +205,19 @@ export function serializeMessage(msg) {
       sizeText: fmtBytes(size),
       kind: "link",
       isPhoto: false,
-      hasThumb: hasPhoto,
+      hasThumb: hasPhoto || !!ytThumb,
+      thumbUrl: ytThumb || null,
       width: null,
       height: null,
       duration: null,
       url,
       domain,
-      hasPreview: !!(wp.title || wp.description || hasPhoto),
+      hasPreview: !!(wp.title || wp.description || hasPhoto || ytThumb),
       previewDescription: wp.description || (msg.message && msg.message.trim() !== url ? msg.message : ""),
+      isMine,
+      canEdit,
+      forwarded,
+      sender,
     };
   }
 
@@ -135,6 +233,8 @@ export function serializeMessage(msg) {
     if (isPureUrl || isTaggedLink) {
       const url = isPureUrl ? raw : lastLine;
       const domain = domainOf(url);
+      const ytId = extractYouTubeId(url);
+      const ytThumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
       const name = isPureUrl ? url : lines[0] !== url ? lines[0] : domain || url;
       const desc = lines.length === 3 ? lines[1] : "";
       const size = Buffer.byteLength(raw, "utf8");
@@ -149,14 +249,19 @@ export function serializeMessage(msg) {
         sizeText: fmtBytes(size),
         kind: "link",
         isPhoto: false,
-        hasThumb: false,
+        hasThumb: !!ytThumb,
+        thumbUrl: ytThumb || null,
         width: null,
         height: null,
         duration: null,
         url,
         domain,
-        hasPreview: false,
+        hasPreview: !!ytThumb,
         previewDescription: desc,
+        isMine,
+        canEdit,
+        forwarded,
+        sender,
       };
     }
 
@@ -178,6 +283,10 @@ export function serializeMessage(msg) {
       height: null,
       duration: null,
       noteContent: raw,
+      isMine,
+      canEdit,
+      forwarded,
+      sender,
     };
   }
 
@@ -258,17 +367,23 @@ export function serializeMessage(msg) {
     height,
     duration,
     ...(artist ? { artist } : {}),
+    isMine,
+    canEdit,
+    forwarded,
+    sender,
   };
 }
 
 /* ---------- listing ---------- */
 
-export async function listMessages(client, peer, { limit = 50, offsetId = 0, search } = {}) {
+export async function listMessages(client, peer, { limit = 50, offsetId = 0, offsetDate = 0, search, myUserId } = {}) {
   const offId = Number(offsetId) || 0;
+  const offDate = Number(offsetDate) || 0;
   const params = {
     limit,
-    offsetId: offId,
   };
+  if (offId) params.offsetId = offId;
+  if (offDate) params.offsetDate = offDate;
   if (search) params.search = search;
   const messages = await client.getMessages(peer, params);
   const items = [];
@@ -276,7 +391,7 @@ export async function listMessages(client, peer, { limit = 50, offsetId = 0, sea
   for (const m of messages) {
     const mid = Number(m.id);
     if (minId === null || mid < minId) minId = mid;
-    const s = serializeMessage(m);
+    const s = serializeMessage(m, myUserId);
     if (s) items.push(s);
   }
   const nextOffset = minId !== null && minId !== offId && messages.length >= limit ? minId : null;
@@ -488,15 +603,38 @@ export async function streamMultipart(client, peer, parts, total, req, res, { at
 /* ---------- thumbnail ---------- */
 
 export async function streamThumb(client, msg, res, cacheKey) {
-  const target =
-    msg?.media instanceof Api.MessageMediaWebPage && msg.media.webpage?.photo
-      ? msg.media.webpage.photo
-      : msg;
+  if (cacheKey) {
+    const cachePath = thumbCachePath(cacheKey);
+    if (fs.existsSync(cachePath)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=604800");
+      return res.sendFile(cachePath);
+    }
+  }
+
+  const isWebPage = msg?.media instanceof Api.MessageMediaWebPage && msg.media.webpage?.photo;
+  const target = isWebPage ? msg.media.webpage.photo : msg;
 
   const tmp = path.join(os.tmpdir(), `tgd-thumb-${Date.now()}-${Math.random().toString(36).slice(2)}.jpg`);
   try {
-    await client.downloadMedia(target, { outputFile: tmp, thumb: 0 });
+    try {
+      await client.downloadMedia(target, { outputFile: tmp, thumb: 0 });
+    } catch {
+      await client.downloadMedia(target, { outputFile: tmp });
+    }
     if (fs.existsSync(tmp) && fs.statSync(tmp).size > 0) {
+      if (cacheKey) {
+        const cachePath = thumbCachePath(cacheKey);
+        try {
+          const buf = fs.readFileSync(tmp);
+          const thumb = await generateThumb(buf);
+          fs.writeFileSync(cachePath, thumb);
+          fs.unlink(tmp, () => {});
+          res.setHeader("Content-Type", "image/jpeg");
+          res.setHeader("Cache-Control", "public, max-age=604800");
+          return res.sendFile(cachePath);
+        } catch {}
+      }
       const data = fs.readFileSync(tmp);
       fs.unlink(tmp, () => {});
       res.setHeader("Content-Type", "image/jpeg");
@@ -524,6 +662,75 @@ export async function streamThumb(client, msg, res, cacheKey) {
   }
   res.status(404).end();
 }
+export async function streamSenderAvatar(client, msg, res, cacheKey) {
+  const isFwd = Boolean(msg?.fwdFrom);
+  let sender = isFwd
+    ? (msg?.forward?.sender || msg?.forward?.chat)
+    : (msg?.sender || msg?.forward?.sender || msg?.forward?.chat);
+
+  if (isFwd && !sender) {
+    const targetPeer = msg?.fwdFrom?.fromId || msg?.fwdFrom?.savedFromPeer;
+    if (targetPeer) {
+      try {
+        sender = await client.getEntity(targetPeer);
+      } catch {}
+    }
+  }
+
+  if (!sender && msg?.fromId) {
+    try {
+      sender = await client.getEntity(msg.fromId);
+    } catch {}
+  }
+  if (!sender && msg?.fwdFrom?.fromId) {
+    try {
+      sender = await client.getEntity(msg.fwdFrom.fromId);
+    } catch {}
+  }
+  if (!sender && msg?.senderId) {
+    try {
+      sender = await client.getEntity(msg.senderId);
+    } catch {}
+  }
+  if (!sender) {
+    return res.status(404).end();
+  }
+
+  const senderId = sender.id ? String(sender.id) : null;
+  const key = cacheKey || (senderId ? `avatar-${senderId}` : null);
+  if (key) {
+    const cachePath = thumbCachePath(key);
+    if (fs.existsSync(cachePath)) {
+      res.setHeader("Content-Type", "image/jpeg");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.sendFile(cachePath);
+    }
+  }
+
+  let buf;
+  try {
+    buf = await client.downloadProfilePhoto(sender, { isBig: false });
+  } catch {
+    return res.status(404).end();
+  }
+
+  if (!buf || !buf.length) {
+    return res.status(404).end();
+  }
+
+  if (key) {
+    const cachePath = thumbCachePath(key);
+    try {
+      fs.writeFileSync(cachePath, buf);
+    } catch {}
+  }
+
+  res.setHeader("Content-Type", "image/jpeg");
+  res.setHeader("Cache-Control", "public, max-age=86400");
+  res.end(buf);
+}
+
+
 
 /* ---------- folders / channels ---------- */
 

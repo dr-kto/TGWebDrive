@@ -23,6 +23,7 @@ import {
   streamToResponse,
   streamMultipart,
   streamThumb,
+  streamSenderAvatar,
 } from "../tg/operations.js";
 import { publish, subscribe, finish, fail } from "../jobs.js";
 import { uid, safeFilename } from "../util.js";
@@ -88,12 +89,13 @@ files.get("/files", requireAppAuth, requireAccount, async (req, res, next) => {
   try {
     const { row, peer, allFolders } = await loadFolder(req, { allowAll: true });
     const client = await getConnectedClient(req.accountId);
+    const acc = stmt.getAccount.get(req.accountId);
+    const myUserId = acc?.user_id ? String(acc.user_id) : null;
     const limit = Math.min(Number(req.query.limit) || 60, 200);
     const offsetId = Number(req.query.offsetId) || 0;
     const search = req.query.search || undefined;
 
     if (allFolders) {
-      if (offsetId) return res.json({ items: [], nextOffset: null, count: 0 });
       const seenPeers = new Set();
       const targetFolders = [];
       for (const f of allFolders) {
@@ -101,14 +103,19 @@ files.get("/files", requireAppAuth, requireAccount, async (req, res, next) => {
         seenPeers.add(f.peer_json);
         targetFolders.push(f);
       }
-      const perFolder = Math.max(20, Math.ceil(limit / Math.max(1, targetFolders.length)) + 15);
+      const perFolder = Math.max(15, Math.ceil(limit / Math.max(1, targetFolders.length)) + 10);
       const aggregated = [];
       const results = await Promise.allSettled(
         targetFolders.slice(0, 15).map(async (f) => {
-          const r = await listMessages(client, buildPeer(f), { limit: perFolder, search });
+          const r = await listMessages(client, buildPeer(f), {
+            limit: perFolder,
+            offsetDate: offsetId ? Number(offsetId) : undefined,
+            search,
+            myUserId,
+          });
           let tagged = r.items.map((it) => ({ ...it, folderId: f.id, folderTitle: f.title }));
           tagged = mergeMultipartIntoList(tagged, req.accountId, f.peer_json, f.id, f.title, {
-            includeVirtual: true,
+            includeVirtual: !offsetId,
             search,
           });
           return tagged;
@@ -117,12 +124,17 @@ files.get("/files", requireAppAuth, requireAccount, async (req, res, next) => {
       for (const r of results) {
         if (r.status === "fulfilled" && Array.isArray(r.value)) aggregated.push(...r.value);
       }
-      aggregated.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
-      const sliced = aggregated.slice(0, limit);
-      return res.json({ items: sliced, nextOffset: null, count: sliced.length });
+      let filtered = aggregated;
+      if (offsetId) {
+        filtered = aggregated.filter((it) => (Number(it.date) || 0) < Number(offsetId));
+      }
+      filtered.sort((a, b) => (Number(b.date) || 0) - (Number(a.date) || 0));
+      const sliced = filtered.slice(0, limit);
+      const nextOffset = filtered.length >= limit && sliced.length > 0 ? sliced[sliced.length - 1].date : null;
+      return res.json({ items: sliced, nextOffset, count: sliced.length });
     }
 
-    const r = await listMessages(client, peer, { limit, offsetId, search });
+    const r = await listMessages(client, peer, { limit, offsetId, search, myUserId });
     r.items = r.items.map((it) => ({ ...it, folderId: row.id, folderTitle: row.title }));
     r.items = mergeMultipartIntoList(r.items, req.accountId, row.peer_json, row.id, row.title, {
       includeVirtual: !offsetId,
@@ -400,8 +412,10 @@ files.get("/files/:id", requireAppAuth, requireAccount, async (req, res, next) =
     }
     const { peer } = await loadFolder(req);
     const client = await getConnectedClient(req.accountId);
+    const acc = stmt.getAccount.get(req.accountId);
+    const myUserId = acc?.user_id ? String(acc.user_id) : null;
     const msg = await getOne(client, peer, req.params.id);
-    res.json({ file: serializeMessage(msg) });
+    res.json({ file: serializeMessage(msg, myUserId) });
   } catch (e) {
     next(e);
   }
@@ -460,6 +474,34 @@ files.get("/files/:id/thumb", requireAppAuth, requireAccount, async (req, res) =
     if (!res.headersSent) res.status(404).end();
   }
 });
+files.get("/files/:id/sender-avatar", requireAppAuth, requireAccount, async (req, res) => {
+  try {
+    if (isMultipartId(req.params.id)) return res.status(404).end();
+    const client = await getConnectedClient(req.accountId);
+    if (!req.query.folder || req.query.folder === "all") {
+      const allFolders = stmt.foldersFor.all(req.accountId);
+      let foundMsg = null;
+      for (const f of allFolders) {
+        try {
+          const p = buildPeer(f);
+          const m = await getOne(client, p, req.params.id);
+          if (m) {
+            foundMsg = m;
+            break;
+          }
+        } catch {}
+      }
+      if (!foundMsg) return res.status(404).end();
+      return await streamSenderAvatar(client, foundMsg, res);
+    }
+    const { peer } = await loadFolder(req);
+    const msg = await getOne(client, peer, req.params.id);
+    await streamSenderAvatar(client, msg, res);
+  } catch {
+    if (!res.headersSent) res.status(404).end();
+  }
+});
+
 
 /* --------- rename (caption / note text) --------- */
 files.patch("/files/:id", requireAppAuth, requireAccount, async (req, res, next) => {
@@ -476,6 +518,9 @@ files.patch("/files/:id", requireAppAuth, requireAccount, async (req, res, next)
     await renameFile(client, peer, req.params.id, text);
     res.json({ ok: true });
   } catch (e) {
+    if (e.message && (e.message.includes("MESSAGE_ID_INVALID") || e.message.includes("CHAT_ADMIN_REQUIRED"))) {
+      return res.status(400).json({ error: "Telegram does not allow editing captions of forwarded messages or messages from other authors." });
+    }
     next(e);
   }
 });

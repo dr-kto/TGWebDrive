@@ -151,6 +151,18 @@ function fullUrl(u) {
   if (!u) return "";
   return u.startsWith("/") ? `${location.origin}${u}` : u;
 }
+function extractYouTubeId(url) {
+  if (!url) return null;
+  const str = String(url).trim();
+  const shortMatch = str.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/i);
+  if (shortMatch) return shortMatch[1];
+  const pathMatch = str.match(/youtube\.com\/(?:shorts|embed|v|live)\/([a-zA-Z0-9_-]{11})/i);
+  if (pathMatch) return pathMatch[1];
+  const queryMatch = str.match(/[?&]v=([a-zA-Z0-9_-]{11})/i);
+  if (queryMatch) return queryMatch[1];
+  const anyMatch = str.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=|shorts\/|live\/))([a-zA-Z0-9_-]{11})/i);
+  return anyMatch ? anyMatch[1] : null;
+}
 
 /* ===================== Modals & Dialogs ===================== */
 function modalOverlay(inner, { closeOnBg = true } = {}) {
@@ -973,8 +985,8 @@ function renderBottomDocks() {
     { k: "media", l: "Media", i: "image" },
     { k: "documents", l: "Docs", i: "fileText" },
     { k: "all", l: "Home", i: "home" },
-    { k: "links", l: "Links", i: "globe" },
-    { k: "notes", l: "Notes", i: "stickyNote" },
+    { k: "links", l: "Links", i: "link2" },
+    { k: "notes", l: "Notes", i: "file" },
   ];
 
   wrap.innerHTML = `
@@ -983,10 +995,10 @@ function renderBottomDocks() {
       <button class="dock-add-btn" id="deskAddBtn">${icon("plus", { size: 15 })}<span>Add</span></button>
     </div>
     <div class="mobile-dock-wrap">
+      <button class="mob-fab" id="mobAddFab" title="Add">${icon("plus", { size: 26, stroke: 2.4 })}</button>
       <div class="mobile-dock">
-        ${mobOrder.map((t) => `<button class="mob-dock-btn ${state.category === t.k ? "active" : ""}" data-cat="${t.k}" title="${t.l}">${icon(t.i, { size: 19 })}</button>`).join("")}
+        ${mobOrder.map((t) => `<button class="mob-dock-btn ${state.category === t.k ? "active" : ""}" data-cat="${t.k}" title="${t.l}">${icon(t.i, { size: 20 })}<span class="mob-dock-label">${t.l}</span></button>`).join("")}
       </div>
-      <button class="mob-fab" id="mobAddFab" title="Add">${icon("plus", { size: 22 })}</button>
     </div>`;
 
   $$("[data-cat]", wrap).forEach((b) => {
@@ -1043,9 +1055,16 @@ async function loadFiles(reset) {
     $("#content").innerHTML = `<div class="center-load"><div class="spinner"></div></div>`;
   }
   state.loading = true;
+  if (!reset) {
+    const btn = $("#loadMoreBtn");
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = `<span class="spinner-sm"></span> Loading…`;
+    }
+  }
   try {
     const r = await api(
-      `/api/files?folder=${encodeURIComponent(state.currentFolder)}&limit=100${state.offsetId ? `&offsetId=${state.offsetId}` : ""}`
+      `/api/files?folder=${encodeURIComponent(state.currentFolder)}&limit=60${state.offsetId ? `&offsetId=${state.offsetId}` : ""}`
     );
     state.files = reset ? r.items : [...state.files, ...r.items];
     state.offsetId = r.nextOffset;
@@ -1057,7 +1076,12 @@ async function loadFiles(reset) {
     renderSidebar();
     renderFiles();
   } catch (err) {
-    $("#content").innerHTML = emptyHtml(err.message, "alert");
+    if (reset) {
+      $("#content").innerHTML = emptyHtml(err.message, "alert");
+    } else {
+      toast(err.message);
+      renderFiles();
+    }
   } finally {
     state.loading = false;
   }
@@ -1120,7 +1144,12 @@ function applySubFilter(items) {
   if (state.subFilter === "all") return items;
   if (state.category === "media") return items.filter((f) => f.kind === state.subFilter);
   if (state.category === "documents") return items.filter((f) => (f.ext || "file").toLowerCase() === state.subFilter);
-  if (state.category === "links") return items.filter((f) => (state.subFilter === "preview" ? f.hasPreview : !f.hasPreview));
+  if (state.category === "links") {
+    return items.filter((f) => {
+      const hasPrev = !!(f.hasPreview || extractYouTubeId(f.url) || f.thumbUrl || f.hasThumb);
+      return state.subFilter === "preview" ? hasPrev : !hasPrev;
+    });
+  }
   if (state.category === "notes") return items.filter((f) => (state.subFilter === "long" ? (f.noteContent || "").length > 120 : (f.noteContent || "").length <= 120));
   return items;
 }
@@ -1154,14 +1183,11 @@ function getProcessedFiles() {
 /* ===================== Folders Carousel (with Peeking Files) ===================== */
 function folderGraphicHtml(fid) {
   const pool = fid === "all" ? state.allAccountFiles : state.allAccountFiles.filter((f) => f.folderId === fid);
-  const peeks = pool.slice(0, 3);
+  const peeks = pool.filter((f) => f.kind === "image" || f.kind === "video").slice(0, 3);
   const peekHtml = peeks
     .map((p) => {
-      if (p.kind === "image" || p.kind === "video") {
-        const src = authUrl(p.thumbUrl || `/api/files/${p.id}/thumb?folder=${p.folderId || fid}`);
-        return `<div class="peek-sheet"><img src="${esc(src)}" alt="" onerror="this.parentNode.textContent='${esc((p.ext || "IMG").toUpperCase())}'" /></div>`;
-      }
-      return `<div class="peek-sheet">${esc((p.ext || p.kind || "FILE").toUpperCase().slice(0, 4))}</div>`;
+      const src = authUrl(p.thumbUrl || `/api/files/${p.id}/thumb?folder=${p.folderId || fid}`);
+      return `<div class="peek-sheet"><img src="${esc(src)}" alt="" onerror="this.parentNode.remove()" /></div>`;
     })
     .join("");
 
@@ -1213,7 +1239,7 @@ function renderFoldersCarousel() {
   const chain = folderChain(state.currentFolder);
   const heading = chain.length
     ? `<span class="crumb" onclick="openFolder('all')">Folders</span>${chain
-        .map((c, idx) => `<span class="crumb-sep">${icon("chevronRight", { size: 14 })}</span>${idx === chain.length - 1 ? `<span>${esc(c.title)}</span>` : `<span class="crumb" onclick="openFolder('${c.id}')">${esc(c.title)}</span>`}`)
+        .map((c, idx) => `<span class="crumb-sep">${icon("chevronRight", { size: 14 })}</span>${idx === chain.length - 1 ? `<span class="crumb-current" title="${esc(c.title)}">${esc(c.title)}</span>` : `<span class="crumb" onclick="openFolder('${c.id}')" title="${esc(c.title)}">${esc(c.title)}</span>`}`)
         .join("")}`
     : `<span>Folders</span>`;
 
@@ -1227,7 +1253,14 @@ function renderFoldersCarousel() {
   return `
     <div class="section-heading-row">
       <div class="section-heading">${heading}</div>
-      <div class="heading-actions">${shareBtn}${importBtn}${subBtn}</div>
+      <div class="heading-actions">
+        <div class="heading-actions-desktop">${shareBtn}${importBtn}${subBtn}</div>
+        <div class="heading-actions-mobile">
+          <button class="btn-2 sm folder-more-btn" id="folderMoreBtn" title="Folder actions">
+            ${icon("moreH", { size: 16 })}
+          </button>
+        </div>
+      </div>
     </div>
     <div class="folders-carousel">${allTile}${tiles}</div>`;
 }
@@ -1250,12 +1283,13 @@ function renderToolbarHtml(afterCat) {
       </div>
     </div>`;
 
-  const zoomGroup = `
-    <div class="segmented-pill">
+  const zoomGroup = state.sortBy === "date"
+    ? `<div class="segmented-pill zoom-pill">
       ${["year", "month", "day", "all"]
         .map((z) => `<button class="seg-btn ${state.dateZoom === z ? "active" : ""}" data-zoom="${z}">${z === "all" ? "All" : z[0].toUpperCase() + z.slice(1)}</button>`)
         .join("")}
-    </div>`;
+    </div>`
+    : "";
 
   const viewGroup = `
     <div class="segmented-pill">
@@ -1344,31 +1378,53 @@ function renderCardHtml(f) {
   const thumbSrc = authUrl(f.thumbUrl || `/api/files/${f.id}/thumb?folder=${folderQuery}`);
   const mpTag = f.multipart ? `<span class="mp-badge">${icon("layers", { size: 10 })} ${f.partsCount}</span>` : "";
   const moreMobile = `<button class="card-more-mobile" title="Actions" onclick="event.stopPropagation();openFileMoreMenu(this,'${f.id}')">${icon("moreH", { size: 15 })}</button>`;
+  const senderChip = (!f.isMine && f.sender)
+    ? `<span>·</span><span class="card-sender-tag" title="${f.forwarded ? "Forwarded from" : "Sent by"} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} ${esc(f.sender.username || f.sender.name)}</span>`
+    : "";
 
   if (f.kind === "note") {
+    const noteText = f.noteContent || f.caption || f.name || "Note";
     return `<div class="card note-card ${sel}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
       <div class="card-sel">${icon("check", { size: 12 })}</div>
       ${cardActionsHtml(f)}${moreMobile}
       <div class="card-body">
-        <div class="card-title">${esc(f.name || "Note")}</div>
-        <div class="note-preview">${esc(f.noteContent || f.caption || "")}</div>
-        <div class="card-meta"><span>Note</span><span>·</span><span>${fmtDate(f.date)}</span></div>
+        <div class="note-preview">${esc(noteText)}</div>
+        <div class="card-meta"><span>Note</span><span>·</span><span>${fmtDate(f.date)}</span>${senderChip}</div>
       </div>
     </div>`;
   }
 
   if (f.kind === "link") {
-    const linkThumb = f.hasThumb ? thumbSrc : f.thumbUrl;
-    const previewImg = f.hasPreview && linkThumb ? `<div class="card-media-wrap"><img src="${esc(linkThumb)}" alt="" loading="lazy" onerror="this.parentNode.style.display='none'" /></div>` : "";
-    return `<div class="card ${sel}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
+    const ytId = extractYouTubeId(f.url);
+    const isYt = !!ytId;
+    let previewMedia = "";
+    if (ytId) {
+      const ytThumb = `https://i.ytimg.com/vi/${esc(ytId)}/hqdefault.jpg`;
+      const fallbackThumb = `https://img.youtube.com/vi/${esc(ytId)}/hqdefault.jpg`;
+      previewMedia = `
+        <div class="card-media-wrap yt-thumb-wrap">
+          <img src="${ytThumb}" alt="${esc(f.name || "YouTube video")}" loading="lazy" onerror="if(this.src!=='${fallbackThumb}')this.src='${fallbackThumb}'" />
+          <div class="yt-play-btn-card">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="#fff"><path d="M8 5v14l11-7z"/></svg>
+          </div>
+          <span class="yt-pill-badge">${icon("play", { size: 10 })} YouTube</span>
+        </div>
+      `;
+    } else {
+      const linkThumb = f.thumbUrl || (f.hasThumb ? thumbSrc : null);
+      if (linkThumb) {
+        previewMedia = `<div class="card-media-wrap link-media"><img src="${esc(linkThumb)}" alt="" loading="lazy" onerror="this.parentNode.style.display='none'" /></div>`;
+      }
+    }
+    return `<div class="card ${sel} ${isYt ? "card-yt" : ""}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
       <div class="card-sel">${icon("check", { size: 12 })}</div>
       ${cardActionsHtml(f)}${moreMobile}
-      ${previewImg}
+      ${previewMedia}
       <div class="card-body">
-        <div class="link-domain-row">${icon("globe", { size: 12 })}<span>${esc(f.domain || "link")}</span></div>
+        <div class="link-domain-row">${icon(isYt ? "play" : "globe", { size: 12 })}<span>${esc(f.domain || (isYt ? "youtube.com" : "link"))}</span></div>
         <div class="card-title">${esc(f.name || f.url)}</div>
         ${f.previewDescription ? `<div class="link-desc">${esc(f.previewDescription)}</div>` : ""}
-        <div class="card-meta"><span>${fmtDate(f.date)}</span></div>
+        <div class="card-meta"><span>${fmtDate(f.date)}</span>${senderChip}</div>
       </div>
     </div>`;
   }
@@ -1384,7 +1440,7 @@ function renderCardHtml(f) {
         <div class="audio-art">${f.hasThumb ? `<img src="${esc(thumbSrc)}" alt="" onerror="this.remove()" />` : icon("music", { size: 20 })}</div>
         <div style="min-width:0;flex:1">
           <div class="card-title" style="-webkit-line-clamp:1;line-clamp:1">${esc(f.name)}</div>
-          <div class="card-meta" style="margin-top:2px">${esc(f.artist || fmtSize(f.size))}</div>
+          <div class="card-meta" style="margin-top:2px">${esc(f.artist || fmtSize(f.size))}${senderChip}</div>
         </div>
       </div>
       <div class="audio-player-bar" onclick="event.stopPropagation()">
@@ -1406,7 +1462,7 @@ function renderCardHtml(f) {
       </div>
       <div class="card-body">
         <div class="card-title">${esc(titleText)}</div>
-        <div class="card-meta"><span>${fmtSize(f.size)}</span><span>·</span><span>${fmtDate(f.date)}</span>${mpTag}</div>
+        <div class="card-meta"><span>${fmtSize(f.size)}</span><span>·</span><span>${fmtDate(f.date)}</span>${senderChip}${mpTag}</div>
       </div>
     </div>`;
   }
@@ -1420,7 +1476,7 @@ function renderCardHtml(f) {
     </div>
     <div class="card-body">
       <div class="card-title">${esc(titleText)}</div>
-      <div class="card-meta"><span>${fmtSize(f.size)}</span><span>·</span><span>${fmtDate(f.date)}</span>${mpTag}</div>
+      <div class="card-meta"><span>${fmtSize(f.size)}</span><span>·</span><span>${fmtDate(f.date)}</span>${senderChip}${mpTag}</div>
     </div>
   </div>`;
 }
@@ -1431,17 +1487,23 @@ function renderListRowHtml(f) {
   const sortLetter = String(titleText || "#").trim().charAt(0).toUpperCase();
   const folderQuery = f.folderId || state.currentFolder;
   const thumbSrc = authUrl(f.thumbUrl || `/api/files/${f.id}/thumb?folder=${folderQuery}`);
-  const hasImg = (f.kind === "image" || f.kind === "video" || f.kind === "audio" || (f.kind === "link" && f.hasPreview)) && (f.hasThumb || f.thumbUrl);
+  const ytId = f.kind === "link" ? extractYouTubeId(f.url) : null;
+  const ytThumb = ytId ? `https://img.youtube.com/vi/${ytId}/hqdefault.jpg` : null;
+  const linkThumb = f.kind === "link" ? (f.thumbUrl || ytThumb || (f.hasThumb ? thumbSrc : null)) : null;
+  const hasImg = ((f.kind === "image" || f.kind === "video" || f.kind === "audio") && (f.hasThumb || f.thumbUrl)) || (f.kind === "link" && linkThumb);
   const thumb = hasImg
-    ? `<img src="${esc(thumbSrc)}" alt="" loading="lazy" onerror="this.remove()" />`
+    ? `<img src="${esc(f.kind === "link" ? linkThumb : thumbSrc)}" alt="" loading="lazy" onerror="this.remove()" />`
     : fileIcon(f.kind, 20);
   const mpTag = f.multipart ? `<span class="mp-badge">${icon("layers", { size: 10 })} ${f.partsCount}</span>` : "";
+  const senderTag = (!f.isMine && f.sender)
+    ? ` · <span class="row-sender-tag" title="${f.forwarded ? "Forwarded from" : "Sent by"} ${esc(f.sender.name || f.sender.username)}">${icon(f.forwarded ? "share" : "user", { size: 10 })} ${esc(f.sender.username || f.sender.name)}</span>`
+    : "";
 
   return `<div class="list-row ${sel}" data-id="${f.id}" data-letter="${esc(sortLetter)}">
     <div class="list-thumb">${thumb}</div>
     <div class="list-main">
       <div class="list-nm">${esc(titleText)} ${mpTag}</div>
-      <div class="list-sub">${f.kind === "link" ? esc(f.domain || f.url) : fmtSize(f.size)} · ${fmtDate(f.date)}</div>
+      <div class="list-sub">${f.kind === "link" ? esc(f.domain || f.url) : fmtSize(f.size)} · ${fmtDate(f.date)}${senderTag}</div>
     </div>
     ${listRowActionsHtml(f)}
   </div>`;
@@ -1460,7 +1522,11 @@ function estimateCardWeight(f) {
     const ratio = f.width && f.height ? f.height / f.width : 1;
     return Math.min(1.6, Math.max(0.6, ratio)) * 180 + 68;
   }
-  if (f.kind === "link" && f.hasPreview && f.thumbUrl) return 210;
+  if (f.kind === "link") {
+    if (extractYouTubeId(f.url)) return 210;
+    if (f.thumbUrl || f.hasThumb) return 220;
+    return 130;
+  }
   if (f.kind === "note") return 150;
   if (f.kind === "audio") return 130;
   return 165;
@@ -1493,6 +1559,7 @@ window.addEventListener("resize", () => {
 function renderFiles() {
   const c = $("#content");
   if (!c) return;
+  document.body.classList.toggle("is-selecting", state.selected.size > 0);
 
   const { items, afterCat } = getProcessedFiles();
   const foldersHtml = renderFoldersCarousel();
@@ -1520,11 +1587,11 @@ function renderFiles() {
   } else if (state.dateZoom !== "all") {
     const groups = groupItemsByDateZoom(items, state.dateZoom);
     if (state.view === "grid") {
-      stageHtml = `<div class="date-columns-scroll">${groups
+      stageHtml = `<div class="files-stage">${groups
         .map(
-          (g) => `<div class="date-col">
-            <div class="date-col-head"><span>${esc(g.label)}</span><span class="date-col-count">${g.items.length}</span></div>
-            ${g.items.map(renderCardHtml).join("")}
+          (g) => `<div class="date-horiz-group">
+            <div class="date-vert-head"><span>${esc(g.label)}</span><span class="date-col-count">${g.items.length}</span></div>
+            <div class="date-horiz-scroll">${g.items.map(renderCardHtml).join("")}</div>
           </div>`
         )
         .join("")}</div>`;
@@ -1548,10 +1615,14 @@ function renderFiles() {
   }
 
   const more = state.offsetId
-    ? `<div class="load-more"><button class="btn-2" onclick="loadFiles(false)">${icon("chevronRight", { size: 14, cls: "down" })} Load more</button></div>`
+    ? `<div class="load-more"><button class="btn-2" id="loadMoreBtn" onclick="loadFiles(false)" ${state.loading ? "disabled" : ""}>${state.loading ? `<span class="spinner-sm"></span> Loading…` : `${icon("chevronRight", { size: 14, cls: "down" })} Load more`}</button></div>`
     : "";
 
-  c.innerHTML = foldersHtml + toolbarHtml + selBar + stageHtml + more;
+  const filesHeading = items.length
+    ? `<div class="section-heading-row"><div class="section-heading"><span>Files</span></div><span class="muted">${items.length} item${items.length === 1 ? "" : "s"}</span></div>`
+    : "";
+
+  c.innerHTML = toolbarHtml + foldersHtml + selBar + filesHeading + stageHtml + more;
 
   // Wire folder tiles & heading buttons
   $$("[data-folder-tile]", c).forEach((t) => {
@@ -1564,6 +1635,29 @@ function renderFiles() {
   c.querySelector("#importChatQuickBtn")?.addEventListener("click", () => importChatModal());
   c.querySelector("#newFolderQuickBtn")?.addEventListener("click", () => {
     newFolder(state.currentFolder !== "all" ? state.currentFolder : null);
+  });
+  c.querySelector("#folderMoreBtn")?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const f = state.folders.find((x) => x.id === state.currentFolder);
+    const menuItems = [];
+    if (f) {
+      menuItems.push({
+        icon: icon("share", { size: 15 }),
+        label: "Share folder",
+        onClick: () => shareFolderModal(f),
+      });
+    }
+    menuItems.push({
+      icon: icon("inbox", { size: 15 }),
+      label: "Import chat",
+      onClick: () => importChatModal(),
+    });
+    menuItems.push({
+      icon: icon("folderPlus", { size: 15 }),
+      label: f ? "Subfolder" : "New folder",
+      onClick: () => newFolder(state.currentFolder !== "all" ? state.currentFolder : null),
+    });
+    openMenu(e.currentTarget, menuItems, { align: "right" });
   });
 
   // Wire toolbar controls
@@ -1578,6 +1672,7 @@ function renderFiles() {
       else {
         state.sortBy = s;
         state.sortDir = s === "name" ? "asc" : "desc";
+        if (s !== "date") state.dateZoom = "all";
       }
       if (window.innerWidth < 640 && s === "date") state.mobileSortExpanded = false;
       renderFiles();
@@ -1607,7 +1702,8 @@ function renderFiles() {
   $$(".card, .list-row", c).forEach((node) => {
     const id = node.dataset.id;
     node.onclick = (e) => {
-      if (e.shiftKey || e.ctrlKey || e.metaKey) toggleSelect(id);
+      if (e.target.closest("button, a, input, .ca-btn, .card-more-mobile, .audio-prog, .audio-ctl")) return;
+      if (e.shiftKey || e.ctrlKey || e.metaKey || state.selected.size > 0) toggleSelect(id);
       else previewFile(id);
     };
     node.oncontextmenu = (e) => {
@@ -1674,6 +1770,8 @@ const folderParamFor = (f) => f?.folderId || (state.currentFolder !== "all" ? st
 window.openFileMoreMenu = (anchor, id) => {
   const f = fileById(id);
   if (!f) return;
+  const isMine = f.isMine !== false;
+  const canEdit = f.canEdit !== undefined ? f.canEdit : isMine;
   const items =
     f.kind === "link"
       ? [
@@ -1685,7 +1783,7 @@ window.openFileMoreMenu = (anchor, id) => {
       : [
           { icon: icon("download", { size: 16 }), label: "Download", onClick: () => downloadFile(f) },
           { icon: icon("share", { size: 16 }), label: "Share", onClick: () => shareModal(f) },
-          { icon: icon("pencil", { size: 16 }), label: "Rename / Caption", onClick: () => renameModal(f) },
+          ...(canEdit ? [{ icon: icon("pencil", { size: 16 }), label: "Rename / Caption", onClick: () => renameModal(f) }] : []),
           { divider: true },
           { icon: icon("trash", { size: 16 }), label: "Delete", danger: true, onClick: () => deleteFileById(f.id) },
         ];
@@ -1751,47 +1849,127 @@ function previewFile(id) {
   window.__pf = f;
 
   if (f.kind === "note") {
+    const isMine = f.isMine !== false;
+    const canEdit = f.canEdit !== undefined ? f.canEdit : isMine;
+    let senderNoteHtml = "";
+    if (!isMine && f.sender) {
+      const s = f.sender;
+      const sName = s.name || s.username || "Telegram User";
+      const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
+      const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
+      const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
+      const headLabel = f.forwarded ? "Forwarded from" : "Sent by";
+      senderNoteHtml = `
+        <div class="split-sender-box" style="margin-bottom:12px">
+          <div class="split-sender-head">${icon(f.forwarded ? "share" : "user", { size: 13 })} ${headLabel}</div>
+          <div class="split-sender-card">
+            <div class="split-sender-avatar">
+              <span class="split-sender-init">${esc(sInit)}</span>
+              ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
+            </div>
+            <div class="split-sender-meta">
+              <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
+              ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
     const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal card-modal">
       <div class="head"><div class="t">${fileIcon("note", 18)} <span>${esc(f.name)}</span></div>
         <button class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
       <div class="body">
-        <textarea id="noteEditBody" rows="9" style="line-height:1.6">${esc(f.noteContent || "")}</textarea>
+        ${senderNoteHtml}
+        <textarea id="noteEditBody" rows="9" style="line-height:1.6" ${canEdit ? "" : "readonly"}>${esc(f.noteContent || "")}</textarea>
         <div class="form-actions">
           <button class="btn-2 danger" id="noteDelBtn">${icon("trash", { size: 14 })} Delete</button>
           <div class="spacer"></div>
           <button class="btn-2" id="noteCopyBtn">${icon("copy", { size: 14 })} Copy</button>
-          <button class="primary" id="noteSaveBtn">${icon("check", { size: 14 })} Save</button>
+          ${canEdit ? `<button class="primary" id="noteSaveBtn">${icon("check", { size: 14 })} Save</button>` : ""}
         </div>
       </div>
     </div></div>`);
     document.body.appendChild(modal);
     modal.querySelector("#noteCopyBtn").onclick = () => copyTxt(modal.querySelector("#noteEditBody").value);
     modal.querySelector("#noteDelBtn").onclick = () => { modal.remove(); deleteFileById(f.id); };
-    modal.querySelector("#noteSaveBtn").onclick = async () => {
-      const txt = modal.querySelector("#noteEditBody").value;
-      await api(`/api/files/${f.id}?folder=${folderParamFor(f)}`, { method: "PATCH", body: JSON.stringify({ noteContent: txt }) });
-      f.noteContent = txt;
-      modal.remove();
-      renderFiles();
-      toast("Note saved");
-    };
+    const saveBtn = modal.querySelector("#noteSaveBtn");
+    if (saveBtn) {
+      saveBtn.onclick = async () => {
+        const txt = modal.querySelector("#noteEditBody").value;
+        await api(`/api/files/${f.id}?folder=${folderParamFor(f)}`, { method: "PATCH", body: JSON.stringify({ noteContent: txt }) });
+        f.noteContent = txt;
+        modal.remove();
+        renderFiles();
+        toast("Note saved");
+      };
+    }
     return;
   }
 
   if (f.kind === "link") {
-    const linkThumb = f.hasThumb ? authUrl(`/api/files/${f.id}/thumb?folder=${folderParamFor(f)}`) : f.thumbUrl;
+    const isMine = f.isMine !== false;
+    let senderLinkHtml = "";
+    if (!isMine && f.sender) {
+      const s = f.sender;
+      const sName = s.name || s.username || "Telegram User";
+      const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
+      const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
+      const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
+      senderLinkHtml = `
+        <div class="split-sender-box" style="margin-bottom:12px">
+          <div class="split-sender-head">${icon("user", { size: 13 })} Shared by</div>
+          <div class="split-sender-card">
+            <div class="split-sender-avatar">
+              <span class="split-sender-init">${esc(sInit)}</span>
+              ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
+            </div>
+            <div class="split-sender-meta">
+              <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
+              ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+    const ytId = extractYouTubeId(f.url);
+    const linkThumb = f.thumbUrl || (f.hasThumb ? authUrl(`/api/files/${f.id}/thumb?folder=${folderParamFor(f)}`) : null);
+    let mediaHtml = "";
+    if (ytId) {
+      const ytEmbedUrl = `https://www.youtube.com/embed/${esc(ytId)}?autoplay=1&enablejsapi=1&rel=0&playsinline=1`;
+      const ytDirectUrl = f.url || `https://www.youtube.com/watch?v=${esc(ytId)}`;
+      const ytThumb = `https://i.ytimg.com/vi/${esc(ytId)}/hqdefault.jpg`;
+      mediaHtml = `
+        <div class="modal-yt-wrap" style="background-image:url('${ytThumb}');background-size:cover;background-position:center">
+          <iframe
+            src="${ytEmbedUrl}"
+            title="${esc(f.name || "YouTube video")}"
+            loading="eager"
+            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+            referrerpolicy="strict-origin-when-cross-origin"
+            allowfullscreen>
+          </iframe>
+        </div>
+        <div class="modal-yt-fallback">
+          <span>${icon("play", { size: 13 })} Video not starting?</span>
+          <a href="${esc(ytDirectUrl)}" target="_blank" rel="noopener">Watch on YouTube ↗</a>
+        </div>
+      `;
+    } else if (linkThumb) {
+      mediaHtml = `<img src="${esc(linkThumb)}" style="width:100%;max-height:260px;object-fit:cover;border-radius:12px;margin-bottom:12px" onerror="this.style.display='none'\" />`;
+    }
     const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal card-modal">
-      <div class="head"><div class="t">${fileIcon("link", 18)} <span>${esc(f.domain || "Link")}</span></div>
+      <div class="head"><div class="t">${icon(ytId ? "play" : "link", { size: 18 })} <span>${esc(f.domain || (ytId ? "YouTube" : "Link"))}</span></div>
         <button class="icon-btn" onclick="this.closest('.modal-bg').remove()">${icon("x", { size: 18 })}</button></div>
       <div class="body">
-        ${f.hasPreview && linkThumb ? `<img src="${esc(linkThumb)}" style="width:100%;max-height:220px;object-fit:cover;border-radius:12px;margin-bottom:12px" onerror="this.style.display='none'" />` : ""}
+        ${mediaHtml}
+        ${senderLinkHtml}
         <div style="font-weight:700;font-size:16px;margin-bottom:6px">${esc(f.name)}</div>
         ${f.previewDescription ? `<p class="muted" style="margin:0 0 12px">${esc(f.previewDescription)}</p>` : ""}
         <div class="copy-row"><input readonly value="${esc(f.url || "")}" /><button class="btn-2" id="lnkCopyBtn">${icon("copy", { size: 14 })} Copy</button></div>
         <div class="form-actions">
           <button class="btn-2 danger" id="lnkDelBtn">${icon("trash", { size: 14 })} Delete</button>
           <div class="spacer"></div>
-          <a class="primary" href="${esc(f.url || "#")}" target="_blank" rel="noopener">${icon("externalLink", { size: 15 })} Open link</a>
+          <a class="primary" href="${esc(f.url || (ytId ? `https://www.youtube.com/watch?v=${ytId}` : "#"))}" target="_blank" rel="noopener">${icon(ytId ? "play" : "externalLink", { size: 15 })} ${ytId ? "Watch on YouTube" : "Open link"}</a>
         </div>
       </div>
     </div></div>`);
@@ -1837,6 +2015,47 @@ function previewFile(id) {
     stageHtml = `<div style="text-align:center;color:#e5e7eb;padding:30px">${fileIcon(f.kind, 56)}<div style="margin-top:12px;font-weight:600">${esc(f.name)}</div><div style="font-size:12px;opacity:.7;margin-top:4px">${fmtSize(f.size)} · No inline preview</div></div>`;
   }
 
+  const isMine = f.isMine !== false;
+  const canEdit = f.canEdit !== undefined ? f.canEdit : isMine;
+  let captionOrSenderHtml = "";
+  if (canEdit) {
+    captionOrSenderHtml = `
+      <div class="field" style="margin:0">
+        <label>Caption</label>
+        <textarea id="splitCaption" rows="4" placeholder="Add a caption…">${esc(f.caption || "")}</textarea>
+      </div>
+      <button class="btn-2" id="saveCapBtn">${icon("check", { size: 14 })} Save caption</button>
+    `;
+  } else {
+    const s = f.sender || {};
+    const sName = s.name || s.username || "Telegram User";
+    const sUser = s.username ? (s.username.startsWith("@") ? s.username : "@" + s.username) : "";
+    const sInit = (sName || sUser || "U").trim().charAt(0).toUpperCase();
+    const sAvatarUrl = authUrl(`/api/files/${f.id}/sender-avatar?folder=${folderParamFor(f)}`);
+    const headLabel = f.forwarded ? "Forwarded from" : "Sent by";
+    captionOrSenderHtml = `
+      <div class="split-sender-box">
+        <div class="split-sender-head">${icon(f.forwarded ? "share" : "user", { size: 13 })} ${headLabel}</div>
+        <div class="split-sender-card">
+          <div class="split-sender-avatar">
+            <span class="split-sender-init">${esc(sInit)}</span>
+            ${s.hasAvatar ? `<img src="${esc(sAvatarUrl)}" alt="" onload="this.classList.add('loaded')" onerror="this.remove()" />` : ""}
+          </div>
+          <div class="split-sender-meta">
+            <div class="split-sender-name" title="${esc(sName)}">${esc(sName)}</div>
+            ${sUser ? `<div class="split-sender-user">${esc(sUser)}</div>` : ""}
+          </div>
+        </div>
+        ${f.caption ? `
+          <div class="split-sender-caption">
+            <div class="split-sender-caption-lbl">Caption (read-only)</div>
+            <div class="split-sender-caption-txt">${esc(f.caption)}</div>
+          </div>` : ""}
+        ${f.forwarded ? `<div style="margin-top:6px;font-size:11px;color:var(--text-muted)">Telegram does not allow editing captions of forwarded messages.</div>` : ""}
+      </div>
+    `;
+  }
+
   const modal = el(`<div class="modal-bg" id="pmodal"><div class="modal split-modal">
     <div class="head">
       <div class="t">${fileIcon(f.kind, 18)} <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(f.name)}</span></div>
@@ -1849,11 +2068,7 @@ function previewFile(id) {
           <div style="font-weight:700;font-size:15px;word-break:break-word">${esc(f.name)}</div>
           <div class="muted" style="font-size:12px;margin-top:4px">${fmtSize(f.size)} · ${esc((f.ext || "").toUpperCase())} · ${fmtDate(f.date)}</div>
         </div>
-        <div class="field" style="margin:0">
-          <label>Caption</label>
-          <textarea id="splitCaption" rows="4" placeholder="Add a caption…">${esc(f.caption || "")}</textarea>
-        </div>
-        <button class="btn-2" id="saveCapBtn">${icon("check", { size: 14 })} Save caption</button>
+        ${captionOrSenderHtml}
         <div class="spacer"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn-2" style="flex:1" onclick="shareModal(window.__pf)">${icon("share", { size: 15 })} Share</button>
@@ -1865,17 +2080,20 @@ function previewFile(id) {
   </div></div>`);
   document.body.appendChild(modal);
 
-  modal.querySelector("#saveCapBtn").onclick = async () => {
-    const cap = modal.querySelector("#splitCaption").value;
-    await api(`/api/files/${f.id}?folder=${folderParamFor(f)}`, {
-      method: "PATCH",
-      body: JSON.stringify(f.multipart ? { name: cap } : { caption: cap }),
-    });
-    if (f.multipart) f.name = cap;
-    else f.caption = cap;
-    renderFiles();
-    toast("Updated");
-  };
+  const saveCapBtn = modal.querySelector("#saveCapBtn");
+  if (saveCapBtn) {
+    saveCapBtn.onclick = async () => {
+      const cap = modal.querySelector("#splitCaption")?.value || "";
+      await api(`/api/files/${f.id}?folder=${folderParamFor(f)}`, {
+        method: "PATCH",
+        body: JSON.stringify(f.multipart ? { name: cap } : { caption: cap }),
+      });
+      if (f.multipart) f.name = cap;
+      else f.caption = cap;
+      renderFiles();
+      toast("Updated");
+    };
+  }
   modal.querySelector("#splitDelBtn").onclick = () => { modal.remove(); deleteFileById(f.id); };
 
   // Wire Video Player Controls
@@ -2632,7 +2850,7 @@ async function openView(v) {
 }
 
 function viewHeaderHtml(ic, title, rightHtml = "") {
-  return `<div class="section-heading-row" style="padding-top:4px;padding-bottom:14px">
+  return `<div class="section-heading-row" style="padding-top:18px;padding-bottom:14px">
     <div class="section-heading">${icon(ic, { size: 19 })} <span>${esc(title)}</span></div>
     <div class="heading-actions">${rightHtml}</div>
   </div>`;
